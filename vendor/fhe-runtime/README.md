@@ -60,6 +60,34 @@ If you swap key files but don't need to reinstall packages:
 bash vendor/fhe-runtime/link-keys.sh
 ```
 
+## Manage keys with the Node CLI (recommended)
+
+A higher-level CLI ships at `scripts/fhe-keys.mjs` and uses the same
+`~/.openclaw/fhe-keys/` store:
+
+```bash
+node scripts/fhe-keys.mjs status              # show table of present/linked
+node scripts/fhe-keys.mjs set skf ./skf       # copy a file into the store + chmod 400
+node scripts/fhe-keys.mjs link                # symlink store files into the runtime
+node scripts/fhe-keys.mjs remove dictf        # clear from store and unlink
+node scripts/fhe-keys.mjs install             # runs install.sh
+```
+
+Status example:
+
+```
+  Name                  Present   Linked    Size        Modified
+  -------------------------------------------------------------------------
+  skf                   ✅         ✅         1.3 KB      2026-05-13 07:02:58
+  dictf                 ✅         ✅         160.2 MB    2026-05-13 07:02:58
+  user_authorization    ✅         ✅         1.1 KB      2026-05-13 07:02:58
+
+  Status: READY — all keys present & linked, FHE runtime can start.
+```
+
+The same backend powers the upcoming **Settings → FHE Keys** UI panel; see
+`docs/fhe-keys-ui.md` for the integration plan.
+
 ## Verify install
 
 ```bash

@@ -234,3 +234,6 @@ extensions/**/.openclaw-runtime-deps-stamp.json
 vendor/fhe-runtime/crypto_toolkit-64_dev/crypto_toolkit/file/skf
 vendor/fhe-runtime/henumpy-dev/henumpy/file/dictf
 vendor/fhe-runtime/henumpy-dev/henumpy/file/user_authorization
+
+# FHE virtualenv
+.venv-fhe/
