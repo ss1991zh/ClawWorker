@@ -18,6 +18,7 @@ export const TAB_GROUPS = [
       "automation",
       "infrastructure",
       "aiAgents",
+      "fheKeys",
       "debug",
       "logs",
     ],
@@ -41,6 +42,7 @@ export type Tab =
   | "automation"
   | "infrastructure"
   | "aiAgents"
+  | "fheKeys"
   | "debug"
   | "logs"
   | "dreams";
@@ -62,6 +64,7 @@ const TAB_PATHS: Record<Tab, string> = {
   automation: "/automation",
   infrastructure: "/infrastructure",
   aiAgents: "/ai-agents",
+  fheKeys: "/fhe-keys",
   debug: "/debug",
   logs: "/logs",
   dreams: "/dreaming",
@@ -189,6 +192,8 @@ export function iconForTab(tab: Tab): IconName {
       return "globe";
     case "aiAgents":
       return "brain";
+    case "fheKeys":
+      return "lobster";
     case "debug":
       return "bug";
     case "logs":

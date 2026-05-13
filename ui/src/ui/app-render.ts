@@ -100,6 +100,13 @@ import {
   saveExecApprovals,
   updateExecApprovalsFormValue,
 } from "./controllers/exec-approvals.ts";
+import {
+  loadFheKeys,
+  relinkFheKeys,
+  removeFheKey,
+  uploadFheKey,
+  type FheKeyName,
+} from "./controllers/fhe-keys.ts";
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
@@ -179,6 +186,7 @@ const lazyAgents = createLazyView(() => import("./views/agents.ts"), notifyLazyV
 const lazyChannels = createLazyView(() => import("./views/channels.ts"), notifyLazyViewChanged);
 const lazyCron = createLazyView(() => import("./views/cron.ts"), notifyLazyViewChanged);
 const lazyDebug = createLazyView(() => import("./views/debug.ts"), notifyLazyViewChanged);
+const lazyFheKeys = createLazyView(() => import("./views/fhe-keys.ts"), notifyLazyViewChanged);
 const lazyInstances = createLazyView(() => import("./views/instances.ts"), notifyLazyViewChanged);
 const lazyLogs = createLazyView(() => import("./views/logs.ts"), notifyLazyViewChanged);
 const lazyNodes = createLazyView(() => import("./views/nodes.ts"), notifyLazyViewChanged);
@@ -2554,6 +2562,18 @@ export function renderApp(state: AppViewState) {
             )
           : nothing}
         ${renderConfigTabForActiveTab()}
+        ${state.tab === "fheKeys"
+          ? renderLazyView(lazyFheKeys, (m) =>
+              m.renderFheKeys(state, {
+                onUpload: (name: FheKeyName, file: File) =>
+                  void uploadFheKey(state, name, file).then(() => requestHostUpdate?.()),
+                onRelink: () => void relinkFheKeys(state).then(() => requestHostUpdate?.()),
+                onRemove: (name: FheKeyName) =>
+                  void removeFheKey(state, name).then(() => requestHostUpdate?.()),
+                onRefresh: () => void loadFheKeys(state).then(() => requestHostUpdate?.()),
+              }),
+            )
+          : nothing}
         ${state.tab === "debug"
           ? renderLazyView(lazyDebug, (m) =>
               m.renderDebug({

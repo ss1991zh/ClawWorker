@@ -22,6 +22,7 @@ import { diagnosticsHandlers } from "./server-methods/diagnostics.js";
 import { doctorHandlers } from "./server-methods/doctor.js";
 import { environmentsHandlers } from "./server-methods/environments.js";
 import { execApprovalsHandlers } from "./server-methods/exec-approvals.js";
+import { fheKeysHandlers } from "./server-methods/fhe-keys.js";
 import { healthHandlers } from "./server-methods/health.js";
 import { logsHandlers } from "./server-methods/logs.js";
 import { modelsAuthStatusHandlers } from "./server-methods/models-auth-status.js";
@@ -104,6 +105,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...doctorHandlers,
   ...environmentsHandlers,
   ...execApprovalsHandlers,
+  ...fheKeysHandlers,
   ...webHandlers,
   ...modelsHandlers,
   ...modelsAuthStatusHandlers,

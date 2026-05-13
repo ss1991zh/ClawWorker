@@ -16,15 +16,14 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 /** Logical names of the three required key files. */
 export type FheKeyName = "skf" | "dictf" | "user_authorization";
 
-export const FHE_KEY_NAMES: readonly FheKeyName[] = [
-  "skf",
-  "dictf",
-  "user_authorization",
-] as const;
+export const FHE_KEY_NAMES: readonly FheKeyName[] = ["skf", "dictf", "user_authorization"] as const;
 
 /** Per-file status entry. */
 export interface FheKeyEntry {
@@ -73,8 +72,10 @@ export function resolveRuntimeDir(opts: ResolveOptions = {}): string {
   if (opts.runtimeDir) return opts.runtimeDir;
   // Repo-root relative; this file lives at src/fhe-keys/index.ts when run from
   // source, so two levels up is the repo root. When bundled to dist/ the
-  // caller should pass `runtimeDir` explicitly.
-  return path.resolve(__dirname, "..", "..", "vendor", "fhe-runtime");
+  // caller should pass `runtimeDir` explicitly, or set OPENCLAW_FHE_RUNTIME_DIR.
+  const envOverride = process.env.OPENCLAW_FHE_RUNTIME_DIR?.trim();
+  if (envOverride) return envOverride;
+  return path.resolve(MODULE_DIR, "..", "..", "vendor", "fhe-runtime");
 }
 
 /** Map a key name to its in-package target path. */
@@ -196,10 +197,7 @@ export async function relinkAll(opts: ResolveOptions = {}): Promise<FheKeysStatu
 }
 
 /** Remove a key from the store (and best-effort drop its dangling link). */
-export async function removeKey(
-  name: FheKeyName,
-  opts: ResolveOptions = {},
-): Promise<void> {
+export async function removeKey(name: FheKeyName, opts: ResolveOptions = {}): Promise<void> {
   const storeDir = resolveStoreDir(opts);
   const runtimeDir = resolveRuntimeDir(opts);
   const storePath = path.join(storeDir, name);

@@ -86,6 +86,7 @@ import type {
 } from "./controllers/dreaming.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type { FheKeyName, FheKeysStatusView } from "./controllers/fhe-keys.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillDetail,
@@ -305,6 +306,10 @@ export class OpenClawApp extends LitElement {
   @state() dreamingStatusLoading = false;
   @state() dreamingStatusError: string | null = null;
   @state() dreamingStatus: DreamingStatus | null = null;
+  @state() fheKeysLoading = false;
+  @state() fheKeysStatus: FheKeysStatusView | null = null;
+  @state() fheKeysError: string | null = null;
+  @state() fheKeysBusyKey: FheKeyName | null = null;
   @state() dreamingModeSaving = false;
   @state() dreamingRestartConfirmOpen = false;
   @state() dreamingRestartConfirmLoading = false;

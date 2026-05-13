@@ -42,6 +42,7 @@ import {
   type DreamingState,
 } from "./controllers/dreaming.ts";
 import { loadExecApprovals, type ExecApprovalsState } from "./controllers/exec-approvals.ts";
+import { loadFheKeys, type FheKeysState } from "./controllers/fhe-keys.ts";
 import { loadLogs, type LogsState } from "./controllers/logs.ts";
 import {
   loadModelAuthStatusState,
@@ -133,6 +134,7 @@ type SettingsAppHost = SettingsHost &
   DevicesState &
   DreamingState &
   ExecApprovalsState &
+  FheKeysState &
   LogsState &
   NodesState &
   PresenceState &
@@ -359,6 +361,9 @@ export async function refreshActiveTab(host: SettingsHost) {
       case "aiAgents":
         void loadConfigSchema(app).finally(() => host.requestUpdate?.());
         await loadConfig(app);
+        break;
+      case "fheKeys":
+        await loadFheKeys(app);
         break;
       case "overview":
         await loadOverview(host);

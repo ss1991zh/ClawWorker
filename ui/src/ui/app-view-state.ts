@@ -181,6 +181,10 @@ export type AppViewState = {
   dreamingStatusLoading: boolean;
   dreamingStatusError: string | null;
   dreamingStatus: import("./controllers/dreaming.js").DreamingStatus | null;
+  fheKeysLoading: boolean;
+  fheKeysStatus: import("./controllers/fhe-keys.js").FheKeysStatusView | null;
+  fheKeysError: string | null;
+  fheKeysBusyKey: import("./controllers/fhe-keys.js").FheKeyName | null;
   dreamingModeSaving: boolean;
   dreamingRestartConfirmOpen: boolean;
   dreamingRestartConfirmLoading: boolean;
