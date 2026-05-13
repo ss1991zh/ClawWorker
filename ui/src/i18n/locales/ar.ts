@@ -1008,7 +1008,7 @@ export const ar: TranslationMap = {
           "أعد فتح لوحة المعلومات المقدمة باستخدام openclaw dashboard حتى يأتي UI وGateway من التثبيت نفسه.",
         stepDevUi:
           "إذا كنت تستخدم pnpm ui:dev، فأعد بناء أو تشغيل واجهة التطوير مقابل checkout الحالي.",
-        stepRestart: "أعد تشغيل Gateway بعد تحديث OpenClaw حتى يقدم البروتوكول الحالي.",
+        stepRestart: "أعد تشغيل Gateway بعد تحديث ClawWorker حتى يقدم البروتوكول الحالي.",
       },
       network: {
         title: "تعذر الاتصال",

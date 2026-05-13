@@ -3,11 +3,11 @@
     "subtitles.fheKeys",
     "tabs.fheKeys"
   ],
-  "generatedAt": "2026-05-13T08:34:28.252Z",
+  "generatedAt": "2026-05-13T09:31:33.202Z",
   "locale": "tr",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "dac117327b45229e838e45eb61aa88a19a2a8b6cde897c0dc23817d5892fe588",
+  "sourceHash": "f82a9c12c62bd99f140167c80986f5fc715fe14cb48d520a145241a374603a63",
   "totalKeys": 1084,
   "translatedKeys": 1082,
   "workflow": 1

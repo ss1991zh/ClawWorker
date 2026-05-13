@@ -991,7 +991,7 @@ export const zh_CN: TranslationMap = {
         stepDashboard:
           "使用 openclaw dashboard 重新打开提供的 dashboard，确保 UI 和 Gateway 来自同一安装。",
         stepDevUi: "如果使用 pnpm ui:dev，请基于当前 checkout 重新构建或重启开发 UI。",
-        stepRestart: "更新 OpenClaw 后重启 Gateway，使其提供当前协议。",
+        stepRestart: "更新 ClawWorker 后重启 Gateway，使其提供当前协议。",
       },
       network: {
         title: "无法连接",

@@ -1026,7 +1026,7 @@ export const uk: TranslationMap = {
         stepDevUi:
           "Якщо використовуєте pnpm ui:dev, перебудуйте або перезапустіть dev UI з поточного checkout.",
         stepRestart:
-          "Перезапустіть Gateway після оновлення OpenClaw, щоб він надавав поточний протокол.",
+          "Перезапустіть Gateway після оновлення ClawWorker, щоб він надавав поточний протокол.",
       },
       network: {
         title: "Не вдалося підключитися",

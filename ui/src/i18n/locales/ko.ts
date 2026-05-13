@@ -1016,7 +1016,7 @@ export const ko: TranslationMap = {
         stepDevUi:
           "pnpm ui:dev를 사용하는 경우 현재 checkout 기준으로 개발 UI를 다시 빌드하거나 다시 시작하세요.",
         stepRestart:
-          "OpenClaw를 업데이트한 뒤 Gateway를 다시 시작하여 현재 프로토콜을 제공하게 하세요.",
+          "ClawWorker를 업데이트한 뒤 Gateway를 다시 시작하여 현재 프로토콜을 제공하게 하세요.",
       },
       network: {
         title: "연결할 수 없음",

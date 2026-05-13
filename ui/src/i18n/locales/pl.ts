@@ -1028,7 +1028,7 @@ export const pl: TranslationMap = {
         stepDevUi:
           "Jeśli używasz pnpm ui:dev, przebuduj lub uruchom ponownie UI dev względem bieżącego checkoutu.",
         stepRestart:
-          "Zrestartuj Gateway po aktualizacji OpenClaw, aby udostępniał bieżący protokół.",
+          "Zrestartuj Gateway po aktualizacji ClawWorker, aby udostępniał bieżący protokół.",
       },
       network: {
         title: "Nie udało się połączyć",

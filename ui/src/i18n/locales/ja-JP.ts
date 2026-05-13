@@ -1026,7 +1026,7 @@ export const ja_JP: TranslationMap = {
           "openclaw dashboard で提供元の dashboard を開き直し、UI と Gateway が同じインストールから来るようにします。",
         stepDevUi:
           "pnpm ui:dev を使用している場合は、現在の checkout に対して開発 UI を再ビルドまたは再起動します。",
-        stepRestart: "OpenClaw 更新後に Gateway を再起動し、現在のプロトコルを提供させます。",
+        stepRestart: "ClawWorker 更新後に Gateway を再起動し、現在のプロトコルを提供させます。",
       },
       network: {
         title: "接続できません",
