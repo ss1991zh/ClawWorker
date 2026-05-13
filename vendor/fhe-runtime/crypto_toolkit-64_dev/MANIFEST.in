@@ -1,0 +1,9 @@
+include *.json
+include *.csv
+include *.gz
+include *.txt
+recursive-include crypto_toolkit/client *
+recursive-include crypto_toolkit/file *
+recursive-include crypto_toolkit/lib *
+recursive-include tools *
+include MANIFEST.in

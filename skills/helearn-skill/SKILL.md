@@ -8,6 +8,15 @@ description: >
   或需要在加密数据上做逻辑回归、线性回归、GBDT、XGBoost 等模型。
   不适用于：普通 sklearn/明文机器学习。
 user-invocable: true
+metadata:
+  openclaw:
+    emoji: "📊"
+    requires:
+      bins: ["python3.11"]
+    install:
+      - id: "fhe-runtime"
+        kind: "reply"
+        label: "Install FHE runtime: bash vendor/fhe-runtime/install.sh (requires Python 3.11 + skf/dictf/user_authorization in ~/.openclaw/fhe-keys/)"
 ---
 
 # helearn — 同态加密机器学习

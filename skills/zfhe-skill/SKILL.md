@@ -8,7 +8,15 @@ description: >
   预处理、统计分析、机器学习训练/预测、深度学习推理等任意组合。
   适用于无法明确归类到单个子 skill 的综合性需求，或需要跨库协作的场景。
 user-invocable: true
-metadata: {"openclaw":{"emoji":"🔐"}}
+metadata:
+  openclaw:
+    emoji: "🔐"
+    requires:
+      bins: ["python3.11"]
+    install:
+      - id: "fhe-runtime"
+        kind: "reply"
+        label: "Install FHE runtime: bash vendor/fhe-runtime/install.sh (requires Python 3.11 + skf/dictf/user_authorization in ~/.openclaw/fhe-keys/)"
 ---
 
 # zfhe-skill — 同态加密全流程数据分析编排

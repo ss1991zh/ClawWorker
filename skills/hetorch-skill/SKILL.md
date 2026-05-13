@@ -8,7 +8,15 @@ description: >
   或需要在加密数据上做 PyTorch 风格的模型推理（nn.Linear、nn.ReLU、F.relu 等）。
   不适用于：普通 PyTorch 明文训练/推理。
 user-invocable: true
-metadata: {"openclaw":{"emoji":"🔐"}}
+metadata:
+  openclaw:
+    emoji: "🔥"
+    requires:
+      bins: ["python3.11"]
+    install:
+      - id: "fhe-runtime"
+        kind: "reply"
+        label: "Install FHE runtime: bash vendor/fhe-runtime/install.sh (requires Python 3.11 + skf/dictf/user_authorization in ~/.openclaw/fhe-keys/)"
 ---
 
 # hetorch2 — 同态加密深度学习推理

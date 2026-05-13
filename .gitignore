@@ -56,7 +56,8 @@ apps/ios/*.xcworkspace/
 apps/ios/.swiftpm/
 apps/ios/.derivedData/
 apps/ios/.local-signing.xcconfig
-vendor/
+vendor/*
+!vendor/fhe-runtime/
 apps/ios/Clawdbot.xcodeproj/
 apps/ios/Clawdbot.xcodeproj/**
 apps/macos/.build/**
@@ -228,3 +229,8 @@ extensions/**/.openclaw-runtime-deps-stamp.json
 /.opengrep-out/
 /.crabbox-artifacts
 .comux*
+
+# FHE runtime — never commit user-supplied secret files
+vendor/fhe-runtime/crypto_toolkit-64_dev/crypto_toolkit/file/skf
+vendor/fhe-runtime/henumpy-dev/henumpy/file/dictf
+vendor/fhe-runtime/henumpy-dev/henumpy/file/user_authorization

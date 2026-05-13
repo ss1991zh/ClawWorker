@@ -8,7 +8,15 @@ description: >
   或需要在加密数据上做数值计算（hp.add、hp.mul、ct.encrypt 等）。
   不适用于：普通 numpy 明文运算。
 user-invocable: true
-metadata: {"openclaw":{"emoji":"🔐"}}
+metadata:
+  openclaw:
+    emoji: "🔢"
+    requires:
+      bins: ["python3.11"]
+    install:
+      - id: "fhe-runtime"
+        kind: "reply"
+        label: "Install FHE runtime: bash vendor/fhe-runtime/install.sh (requires Python 3.11 + skf/dictf/user_authorization in ~/.openclaw/fhe-keys/)"
 ---
 
 # henumpy — 同态加密数值计算

@@ -8,7 +8,15 @@ description: >
   或需要在加密数据上做 Pandas 风格的操作（ps.read_csv、cdf.groupby、ps.merge 等）。
   不适用于：普通 pandas 明文操作。
 user-invocable: true
-metadata: {"openclaw":{"emoji":"🔒"}}
+metadata:
+  openclaw:
+    emoji: "🐼"
+    requires:
+      bins: ["python3.11"]
+    install:
+      - id: "fhe-runtime"
+        kind: "reply"
+        label: "Install FHE runtime: bash vendor/fhe-runtime/install.sh (requires Python 3.11 + skf/dictf/user_authorization in ~/.openclaw/fhe-keys/)"
 ---
 
 # pandaseal — 同态加密 DataFrame 数据分析
