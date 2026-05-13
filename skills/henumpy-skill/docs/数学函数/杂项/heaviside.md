@@ -1,0 +1,76 @@
+# heaviside
+
+### 计算 Heaviside 阶跃函数
+
+## 参数
+
+标量密文或数组密文
+
+- `x_1`：输入值
+- `x_2`： $ x_1 $为 0 时的函数值
+- `output_encrypt_type`：标量明文，可选 输出的数组密文的加密方式，默认返回的加密方式与输入数组的加密方式一致，若设定 $ output\_encrypt\_type=0 $，则返回的数组为行加密形式；若 $ output\_encrypt\_type=1 $，则返回的为列加密形式。
+
+## 返回值
+
+标量密文或数组密文 $ heaviside(x_1,x_2)=\begin{cases}cc0 & x_1 < 0\\x_2 & x_1 = 0\\cc1 & x_1 > 0\end{cases} $
+
+注：cc0 和 cc1分别为 0 和 1 的密文，随计算字典的不同而改变
+
+## 示例
+```python
+import henumpy as hp
+import crypto_toolkit as ct
+import numpy as np
+
+hp.initDict()
+ct.initSK()
+
+# 标量和标量
+x1 = ct.encrypt(5)
+x2 = ct.encrypt(3)
+res = hp.heaviside(x1, x2)
+print(ct.decrypt(res))
+# 输出  0.9999999999999998
+
+# 向量和向量
+aa = np.array([0.5, 0.3, 4.3, 0.1])
+a = ct.encrypt(aa)
+bb = np.array([2.1, 4.0, 5.2, 40.5])
+b = ct.encrypt(bb)
+res = hp.heaviside(a, b)
+print(ct.decrypt(res))
+# 输出 [1. 1. 1. 1.]
+
+# 标量和向量
+res = hp.heaviside(a, x2)
+print(ct.decrypt(res))
+# 输出 [1. 1. 1. 1.]
+
+# 数组和数组
+AA = np.array([[ 1.,  2.,  3.],[ 2., -3.,  4.],[ 3.,  1.,  4.]])
+A = ct.encrypt(AA)
+BB = np.array([[ 0.5,  4.,  2.],[ 4., 5.,  -6.],[ -0.1,  0.7,  2.2]])
+B = ct.encrypt(BB)
+res = hp.heaviside(A, B)
+print(ct.decrypt(res))
+# 输出 [[1.00000000e+00 1.00000000e+00 1.00000000e+00]
+#       [1.00000000e+00 7.62037063e-16 1.00000000e+00]
+#       [1.00000000e+00 1.00000000e+00 1.00000000e+00]]
+
+# 标量和数组		
+res = hp.heaviside(x2, B)	
+print(ct.decrypt(res))
+# 输出 [[1. 1. 1.]
+#       [1. 1. 1.]
+#       [1. 1. 1.]]
+
+# 向量和数组
+aa2 = np.array([0.5, 0.3])
+a2 = ct.encrypt(aa2)
+CC = np.array([[ 1.,  2.],[ 2., -3.]])
+C = ct.encrypt(CC)
+res = hp.heaviside(a2, C)		
+print(ct.decrypt(res))
+# 输出 [[1. 1.]
+#       [1. 1.]]
+```

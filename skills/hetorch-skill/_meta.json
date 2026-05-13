@@ -1,0 +1,21 @@
+{
+  "name": "hetorch-skill",
+  "version": "2.0.0",
+  "description": "同态加密深度学习推理代码生成 Skill（hetorch2 + crypto_toolkit）",
+  "triggers": [
+    "hetorch2",
+    "hetorch",
+    "HE-Torch",
+    "CipherTensor",
+    "密文深度学习",
+    "密文推理",
+    "encrypted inference",
+    "homomorphic deep learning"
+  ],
+  "files": {
+    "entry": "SKILL.md",
+    "index": "INDEX.md",
+    "docs": "docs/",
+    "examples": "examples/"
+  }
+}

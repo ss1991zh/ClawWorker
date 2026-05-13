@@ -1,0 +1,67 @@
+# hp.div
+
+逐元素除法，返回 `x1 / x2`。
+
+## 签名
+
+```python
+hp.div(x1, x2, output_encrypt_type=None)
+```
+
+## 参数
+
+- `x1`: 标量密文/数组密文/标量明文 — 被除数
+- `x2`: 标量密文/数组密文/标量明文 — 除数
+- `output_encrypt_type` (可选): int — 输出加密方式。省略=与输入一致, 0=行加密, 1=列加密
+
+若 `x1.shape ≠ x2.shape`，自动广播到通用形状。
+
+## 返回值
+
+标量密文或数组密文 — `x1 / x2`。
+
+> **备注**: `/` 运算符可作为 `hp.div` 的简写。注意名称是 `div`，不是 `divide`。
+
+## 示例
+
+```python
+import henumpy as hp
+import crypto_toolkit as ct
+import numpy as np
+
+hp.initDict()
+ct.initSK()
+
+# 标量 / 标量
+x1 = ct.encrypt(5)
+x2 = ct.encrypt(3)
+res = hp.div(x1, x2)   # 等价于 x1 / x2
+print(ct.decrypt(res))
+# 输出 1.6666666666666663
+
+# 向量 / 向量
+a = ct.encrypt(np.array([0.5, 0.3, 4.3, 0.1]))
+b = ct.encrypt(np.array([2.1, 4.0, 5.2, 40.5]))
+res = hp.div(a, b)      # 等价于 a / b
+print(ct.decrypt(res))
+# 输出 [0.23809524 0.075      0.82692308 0.00246914]
+
+# 密文 / 明文
+res = hp.div(x1, 2)     # 等价于 x1 / 2
+print(ct.decrypt(res))
+# 输出 2.5
+
+# 明文 / 密文
+res = 2.0 / x1          # 等价于 hp.div(2.0, x1)
+print(ct.decrypt(res))
+# 输出 0.3999999999999999
+
+# 矩阵 / 矩阵
+A = ct.encrypt(np.array([[1., 2., 3.], [2., -3., 4.], [3., 1., 4.]]))
+B = ct.encrypt(np.array([[0.5, 4., 2.], [4., 5., -6.], [-0.1, 0.7, 2.2]]))
+res = hp.div(A, B)      # 等价于 A / B
+print(ct.decrypt(res))
+# 输出 [[  2.           0.5          1.5       ]
+#       [  0.5         -0.6         -0.66666667]
+#       [-30.           1.42857143   1.81818182]]
+```

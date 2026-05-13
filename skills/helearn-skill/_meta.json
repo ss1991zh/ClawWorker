@@ -1,0 +1,20 @@
+{
+  "name": "helearn-skill",
+  "version": "1.0.0",
+  "description": "同态加密机器学习代码生成 Skill（helearn + henumpy + crypto_toolkit）",
+  "triggers": [
+    "helearn",
+    "HE-Learn",
+    "密文机器学习",
+    "密文训练",
+    "密文推理",
+    "encrypted ML",
+    "homomorphic machine learning"
+  ],
+  "files": {
+    "entry": "SKILL.md",
+    "index": "INDEX.md",
+    "docs": "docs/",
+    "examples": "examples/"
+  }
+}
