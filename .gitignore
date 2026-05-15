@@ -1,0 +1,11 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime data — contains API keys, sessions, usage, FHE keys. NEVER commit.
+data/
+
+# OS
+.DS_Store
