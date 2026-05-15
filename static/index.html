@@ -148,6 +148,9 @@
         max-width: min(78%, 620px); align-items: flex-start;
       }
       .msg.user .msg__content { align-items: flex-end; }
+      /* 回复消息：左边界不变，右边界延伸到与提问头像对齐（整列宽度）*/
+      .msg.bot .msg__content { max-width: 100%; }
+      .msg.bot .bubble { width: 100%; max-width: 100%; }
       .bubble {
         width: fit-content; max-width: 100%;
         padding: 12px 16px; border-radius: var(--radius);
@@ -158,6 +161,37 @@
       }
       .msg.user .bubble { background: var(--blue); color: #fff; border-bottom-right-radius: 4px; }
       .msg.bot .bubble { background: var(--surface); border: none; border-bottom-left-radius: 4px; }
+      .bubble.md { white-space: normal; }
+      .bubble.md > *:first-child { margin-top: 0; }
+      .bubble.md > *:last-child { margin-bottom: 0; }
+      .bubble.md p { margin: 8px 0; }
+      .bubble.md h1, .bubble.md h2, .bubble.md h3 { margin: 14px 0 8px; line-height: 1.35; }
+      .bubble.md h1 { font-size: 1.3em; }
+      .bubble.md h2 { font-size: 1.18em; }
+      .bubble.md h3 { font-size: 1.06em; }
+      .bubble.md ul, .bubble.md ol { margin: 8px 0; padding-left: 22px; }
+      .bubble.md li { margin: 3px 0; }
+      .bubble.md code {
+        background: #eef2f7; padding: 2px 6px;
+        border-radius: 5px; font-size: 0.88em;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      }
+      .bubble.md pre {
+        background: var(--bg); color: var(--text); padding: 12px 14px;
+        border: 1px solid var(--border); border-radius: 10px;
+        overflow-x: auto; margin: 10px 0;
+      }
+      .bubble.md pre code { background: transparent; color: inherit; padding: 0; font-size: 0.86em; }
+      .bubble.md a { color: var(--blue); text-decoration: underline; }
+      .bubble.md blockquote {
+        margin: 10px 0; padding: 4px 14px; border-left: 3px solid var(--blue-ring);
+        color: var(--text-muted);
+      }
+      .bubble.md hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+      .bubble.md table { border-collapse: collapse; margin: 10px 0; font-size: 0.92em; }
+      .bubble.md th, .bubble.md td { border: 1px solid var(--border); padding: 6px 10px; }
+      .bubble.md th { background: var(--blue-light); }
+      .bubble.md strong { font-weight: 600; }
       .msg.bot .avatar { display: none; }
       /* 一问一答为一轮，新一轮提问前留更大间距 */
       .msg.bot + .msg.user { margin-top: 26px; }
@@ -408,8 +442,29 @@
       </div>
     </div>
 
+    <script src="/static/marked.min.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
+      // Markdown → HTML（轻量消毒：去掉 script/事件属性）
+      if (window.marked) marked.setOptions({ breaks: true, gfm: true });
+      function renderMd(text) {
+        let html;
+        try {
+          html = window.marked ? marked.parse(String(text || "")) : null;
+        } catch {
+          html = null;
+        }
+        if (html == null) {
+          const d = document.createElement("div");
+          d.textContent = String(text || "");
+          return d.innerHTML;
+        }
+        return html
+          .replace(/<script[\s\S]*?<\/script>/gi, "")
+          .replace(/ on\w+="[^"]*"/gi, "")
+          .replace(/ on\w+='[^']*'/gi, "")
+          .replace(/javascript:/gi, "");
+      }
       // Flat stroke icons (Feather/Lucide style)
       const svg = (p) =>
         `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
@@ -445,7 +500,12 @@
         wrap.className = "msg__content";
         const bubble = document.createElement("div");
         bubble.className = "bubble";
-        bubble.textContent = text;
+        if (role === "bot") {
+          bubble.classList.add("md");
+          bubble.innerHTML = renderMd(text);
+        } else {
+          bubble.textContent = text;
+        }
         wrap.appendChild(bubble);
         msg.append(av, wrap);
         chat.appendChild(msg);
@@ -482,7 +542,9 @@
             if (atBottom()) main.scrollTop = main.scrollHeight;
             if (i >= full.length) {
               clearInterval(timer);
-              bubble.textContent = full;
+              bubble.classList.add("md");
+              bubble.innerHTML = renderMd(full);
+              if (atBottom()) main.scrollTop = main.scrollHeight;
               resolve();
             }
           }, 14);
