@@ -330,10 +330,16 @@
       }
       .stat .num { font-size: 24px; font-weight: 700; color: var(--blue); }
       .stat .lbl { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
-      .bars { display: flex; align-items: flex-end; gap: 6px; height: 110px; margin: 14px 0 6px; }
-      .bar { flex: 1; background: var(--blue); border-radius: 4px 4px 0 0; min-height: 3px; transition: height 0.3s; }
-      .bar-wrap { display: flex; flex-direction: column; align-items: center; flex: 1; gap: 4px; }
-      .bar-lbl { font-size: 9px; color: var(--text-muted); transform: rotate(-40deg); white-space: nowrap; }
+      .bars { display: flex; align-items: flex-end; gap: 6px; height: 170px; margin: 14px 0 8px; }
+      .bar-wrap { flex: 1; height: 100%; display: flex; flex-direction: column; align-items: center; }
+      .bar-col { flex: 1; width: 100%; display: flex; align-items: flex-end; justify-content: center; }
+      .bar {
+        width: 64%; max-width: 30px; background: var(--blue);
+        border-radius: 4px 4px 0 0; min-height: 2px;
+        transition: height 0.3s, background 0.15s; cursor: pointer;
+      }
+      .bar:hover { background: var(--blue-dark); }
+      .bar-lbl { font-size: 9px; color: var(--text-muted); margin-top: 7px; transform: rotate(-42deg); white-space: nowrap; height: 14px; }
       .list-item {
         display: flex; align-items: center; gap: 10px; padding: 12px;
         border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px;
@@ -592,9 +598,20 @@
         wrap.appendChild(box);
       }
 
+      const SESS_KEY = "cw.currentSession";
+      function rememberSession(id) {
+        try { id ? localStorage.setItem(SESS_KEY, id) : localStorage.removeItem(SESS_KEY); } catch {}
+      }
+
       async function loadSessions() {
         sessions = await (await fetch("/api/sessions")).json();
         renderSessionList();
+        // 刷新后保持在原会话：恢复上次选中的会话并重新拉取内容
+        let saved = null;
+        try { saved = localStorage.getItem(SESS_KEY); } catch {}
+        if (saved && sessions.some((s) => s.id === saved)) {
+          await selectSession(saved);
+        }
       }
       function renderSessionList() {
         sessionList.innerHTML = "";
@@ -633,6 +650,7 @@
         sessions = sessions.filter((s) => s.id !== id);
         if (currentSession === id) {
           currentSession = null;
+          rememberSession(null);
           clearChat(true);
           topTitle.textContent = "智能助手";
         }
@@ -641,6 +659,7 @@
 
       async function selectSession(id) {
         currentSession = id;
+        rememberSession(id);
         renderSessionList();
         closeSidebar();
         const meta = sessions.find((s) => s.id === id);
@@ -747,6 +766,7 @@
           const s = await (await fetch("/api/sessions", { method: "POST" })).json();
           sessions.unshift(s);
           currentSession = s.id;
+          rememberSession(s.id);
           renderSessionList();
         }
         input.value = ""; input.style.height = "auto"; addMsg("user", text);
@@ -933,10 +953,17 @@
             <div class="stat"><div class="num">${u.todayTokens.toLocaleString()}</div><div class="lbl">今日 Token</div></div>
             <div class="stat"><div class="num">${u.callCount}</div><div class="lbl">调用次数</div></div>
           </div>
-          <label style="font-size:13px;font-weight:600">近 14 天趋势</label>
-          <div class="bars">${u.series.map((s) =>
-            `<div class="bar-wrap"><div class="bar" style="height:${Math.round(s.tokens/max*100)}%" title="${s.day}: ${s.tokens}"></div><div class="bar-lbl">${s.day.slice(5)}</div></div>`
-          ).join("") || '<div class="sub">暂无数据</div>'}</div>
+          <label style="font-size:13px;font-weight:600">近 14 天趋势（鼠标悬停查看具体数值）</label>
+          <div class="bars">${(() => {
+            const MAXPX = 130;
+            const peak = Math.max(1, ...u.series.map((s) => s.tokens));
+            return u.series.map((s) => {
+              const h = s.tokens > 0 ? Math.max(3, Math.round(s.tokens / peak * MAXPX)) : 1;
+              return `<div class="bar-wrap"><div class="bar-col">` +
+                `<div class="bar" style="height:${h}px" title="${s.day}：${s.tokens.toLocaleString()} tokens"></div>` +
+                `</div><div class="bar-lbl">${s.day.slice(5)}</div></div>`;
+            }).join("");
+          })()}</div>
           <label style="font-size:13px;font-weight:600;display:block;margin-top:22px">按模型</label>
           <table class="usage-tbl"><tr><th>模型</th><th>Token</th></tr>
             ${u.byModel.map((m) => `<tr><td>${esc(m.model)}</td><td>${m.tokens.toLocaleString()}</td></tr>`).join("") || '<tr><td colspan=2 class="sub">暂无</td></tr>'}

@@ -102,12 +102,22 @@ def usage_summary() -> dict:
     today = datetime.now(timezone.utc).date().isoformat()
     total = sum(r["total"] for r in recs)
     today_total = sum(r["total"] for r in recs if r["ts"][:10] == today)
-    # Per-day series (last 14 days)
+    # Per-day series — fixed window of the last 14 calendar days,
+    # filling 0 for days with no usage so the bar chart is continuous.
+    from datetime import timedelta
+
     by_day: dict[str, int] = {}
     for r in recs:
         day = r["ts"][:10]
         by_day[day] = by_day.get(day, 0) + r["total"]
-    series = sorted(by_day.items())[-14:]
+    today_date = datetime.now(timezone.utc).date()
+    series = [
+        (
+            (today_date - timedelta(days=offset)).isoformat(),
+            by_day.get((today_date - timedelta(days=offset)).isoformat(), 0),
+        )
+        for offset in range(13, -1, -1)  # 13 天前 → 今天，共 14 天
+    ]
     # Per-model breakdown
     by_model: dict[str, int] = {}
     for r in recs:
