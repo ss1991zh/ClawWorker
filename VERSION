@@ -1,0 +1,20 @@
+ClawWorker LangGraph Agent
+
+v0.3.0  (2026-05-17)
+
+变更:
+- Skill 接入 Agent（OpenClaw 式渐进披露）
+  · system prompt 注入技能目录 <available_skills>
+  · read_skill / read_skill_file 工具
+- run_python 工具：在 .venv-fhe 执行，支持密态计算
+- 已接入 5 个 FHE 技能（zfhe / henumpy / pandaseal / helearn / hetorch）
+- vendor/fhe-runtime：4 个密态计算 Python 包
+- FHE 密钥管理（配置中心拖拽上传 → 自动软链 vendor 包）
+- Skill 管理支持文件夹拖拽 + 多技能 + 关联文件 + 格式校验
+- 端到端验证：密文→计算→明文 全过程可见
+
+历史版本:
+- v0.2.0  Markdown 渲染 + 布局 + 配置中心
+- v0.1.0  LangGraph 多会话 Web UI 初版
+
+注: data/（apikey/会话/用量/密钥）与 .venv* 不入库。

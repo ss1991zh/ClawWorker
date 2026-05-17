@@ -1,0 +1,7 @@
+.vscode/
+build/
+dist/
+henumpy/file/user*
+henumpy/file/dict*
+henumpy.egg-info/
+*.pyc

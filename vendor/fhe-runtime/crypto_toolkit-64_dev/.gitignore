@@ -1,0 +1,13 @@
+.vscode/
+build/
+dist/
+crypto_toolkit.egg-info/
+crypto_toolkit/file/output.csv
+crypto_toolkit/file/deinput.csv
+crypto_toolkit/file/skf
+*.pyc
+.DS_Store
+__pycache__/
+*.egg
+*.egg-info/
+tests/*

@@ -134,17 +134,44 @@ def usage_summary() -> dict:
 # ---------------------------------------------------------------------------
 
 def list_skills() -> list[dict]:
+    """Recursively find every SKILL.md under data/skills/. A skill is its
+    containing directory (OpenClaw spec: SKILL.md + references/scripts/
+    templates/assets). Supports nested category dirs and multi-file skills."""
     out = []
-    for d in sorted(SKILLS_DIR.iterdir()):
-        md = d / "SKILL.md" if d.is_dir() else d
-        if d.is_dir() and md.exists():
-            text = md.read_text(encoding="utf-8", errors="replace")
-            name, desc = _parse_skill_frontmatter(text, d.name)
-            out.append({"name": name, "id": d.name, "description": desc, "size": md.stat().st_size})
-        elif d.is_file() and d.suffix == ".md":
-            text = d.read_text(encoding="utf-8", errors="replace")
-            name, desc = _parse_skill_frontmatter(text, d.stem)
-            out.append({"name": name, "id": d.stem, "description": desc, "size": d.stat().st_size})
+    if not SKILLS_DIR.exists():
+        return out
+    for md in sorted(SKILLS_DIR.rglob("SKILL.md")):
+        skill_dir = md.parent
+        rel = skill_dir.relative_to(SKILLS_DIR)
+        skill_id = str(rel) if str(rel) != "." else skill_dir.name
+        text = md.read_text(encoding="utf-8", errors="replace")
+        name, desc = _parse_skill_frontmatter(text, skill_dir.name)
+        files = [
+            str(p.relative_to(skill_dir))
+            for p in sorted(skill_dir.rglob("*"))
+            if p.is_file()
+        ]
+        total = sum((skill_dir / f).stat().st_size for f in files)
+        out.append(
+            {
+                "name": name,
+                "id": skill_id,
+                "description": desc,
+                "size": total,
+                "fileCount": len(files),
+                "files": files,
+            }
+        )
+    # Legacy: bare *.md directly under skills/ (single-file skill)
+    for f in sorted(SKILLS_DIR.glob("*.md")):
+        if f.name == "SKILL.md":
+            continue
+        text = f.read_text(encoding="utf-8", errors="replace")
+        name, desc = _parse_skill_frontmatter(text, f.stem)
+        out.append(
+            {"name": name, "id": f.stem, "description": desc, "size": f.stat().st_size,
+             "fileCount": 1, "files": [f.name]}
+        )
     return out
 
 
@@ -161,22 +188,132 @@ def _parse_skill_frontmatter(text: str, fallback: str) -> tuple[str, str]:
     return name, desc
 
 
+def validate_skill(content: str) -> tuple[bool, str, str, str]:
+    """Validate a SKILL.md. Returns (ok, error, name, description).
+
+    Required: a YAML-ish frontmatter block delimited by `---` containing
+    at least `name:` and `description:`, plus a non-empty body.
+    """
+    text = (content or "").strip()
+    if not text.startswith("---"):
+        return False, "缺少 frontmatter（文件须以 --- 开头）", "", ""
+    end = text.find("---", 3)
+    if end < 0:
+        return False, "frontmatter 未闭合（缺少结束的 ---）", "", ""
+    name, desc = "", ""
+    for line in text[3:end].splitlines():
+        s = line.strip()
+        if s.startswith("name:"):
+            name = s.split(":", 1)[1].strip()
+        elif s.startswith("description:"):
+            desc = s.split(":", 1)[1].strip()
+    if not name:
+        return False, "frontmatter 缺少 name 字段", "", ""
+    if not desc:
+        return False, "frontmatter 缺少 description 字段", "", ""
+    body = text[end + 3 :].strip()
+    if not body:
+        return False, "技能正文为空（--- 之后需有说明内容）", "", ""
+    return True, "", name, desc
+
+
 def add_skill(skill_id: str, content: str) -> None:
-    safe = "".join(c for c in skill_id if c.isalnum() or c in "-_")
+    safe = "".join(c for c in skill_id if c.isalnum() or c in "-_") or "skill"
     d = SKILLS_DIR / safe
     d.mkdir(exist_ok=True)
     (d / "SKILL.md").write_text(content, encoding="utf-8")
 
 
+def _safe_rel(rel: str) -> pathlib.PurePosixPath | None:
+    """Sanitize an incoming relative path: no abs, no .. traversal."""
+    rel = (rel or "").lstrip("/").replace("\\", "/")
+    parts = [p for p in pathlib.PurePosixPath(rel).parts if p not in ("", ".")]
+    if any(p == ".." for p in parts) or not parts:
+        return None
+    return pathlib.PurePosixPath(*parts)
+
+
+def install_skill_bundle(files: list[dict]) -> dict:
+    """Install one or more skills from a dropped folder.
+
+    `files` = [{path: "skillA/SKILL.md", b64: "..."}, {path:
+    "skillA/references/x.md", b64: "..."}, ...]
+
+    Every SKILL.md defines a skill (its parent dir is the skill root). The
+    whole skill subtree is copied under data/skills/<skill-id>/. Returns
+    per-skill results.
+    """
+    import base64 as _b64
+
+    # Index files by sanitized relative path.
+    by_path: dict[str, bytes] = {}
+    for f in files:
+        rel = _safe_rel(f.get("path", ""))
+        if rel is None:
+            continue
+        try:
+            by_path[str(rel)] = _b64.b64decode(f.get("b64", ""))
+        except Exception:
+            continue
+
+    # Find every SKILL.md → its dir is a skill root.
+    skill_roots = sorted(
+        {str(pathlib.PurePosixPath(p).parent) for p in by_path if p.endswith("SKILL.md")}
+    )
+    if not skill_roots:
+        return {"ok": False, "error": "未找到任何 SKILL.md", "skills": []}
+
+    results = []
+    for root in skill_roots:
+        root_pp = pathlib.PurePosixPath(root)
+        md_key = str(root_pp / "SKILL.md")
+        try:
+            md_text = by_path[md_key].decode("utf-8", errors="replace")
+        except Exception:
+            md_text = ""
+        ok, err, name, desc = validate_skill(md_text)
+        skill_id = root_pp.name if root_pp.name not in ("", ".") else (name or "skill")
+        safe_id = "".join(c for c in skill_id if c.isalnum() or c in "-_") or "skill"
+        if not ok:
+            results.append({"id": safe_id, "name": name or safe_id, "ok": False, "error": err})
+            continue
+        # Copy every file whose path is under this skill root.
+        dest_root = SKILLS_DIR / safe_id
+        prefix = root + "/" if root not in ("", ".") else ""
+        count = 0
+        for path, data in by_path.items():
+            if root in ("", ".") or path == root or path.startswith(prefix):
+                sub = path[len(prefix):] if prefix else pathlib.PurePosixPath(path).name
+                if not sub:
+                    continue
+                target = dest_root / pathlib.Path(*pathlib.PurePosixPath(sub).parts)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+                count += 1
+        results.append(
+            {"id": safe_id, "name": name, "description": desc, "ok": True, "fileCount": count}
+        )
+
+    ok_n = sum(1 for r in results if r["ok"])
+    return {"ok": ok_n > 0, "installed": ok_n, "total": len(results), "skills": results}
+
+
 def delete_skill(skill_id: str) -> bool:
     import shutil
 
-    safe = "".join(c for c in skill_id if c.isalnum() or c in "-_")
-    target = SKILLS_DIR / safe
+    # Allow nested ids like "category/skill"; sanitize each segment.
+    parts = [
+        "".join(c for c in seg if c.isalnum() or c in "-_")
+        for seg in (skill_id or "").replace("\\", "/").split("/")
+        if seg
+    ]
+    if not parts:
+        return False
+    target = SKILLS_DIR.joinpath(*parts)
     if target.is_dir():
         shutil.rmtree(target)
         return True
-    f = SKILLS_DIR / f"{safe}.md"
+    f = SKILLS_DIR.joinpath(*parts[:-1]) / f"{parts[-1]}.md"
     if f.exists():
         f.unlink()
         return True
@@ -188,6 +325,39 @@ def delete_skill(skill_id: str) -> bool:
 # ---------------------------------------------------------------------------
 
 FHE_KEY_NAMES = ("skf", "dictf", "user_authorization")
+
+# Where each key must end up inside the vendored FHE packages so the
+# Python runtime can find it (paths from vendor/fhe-runtime/README.md).
+_FHE_RUNTIME = ROOT / "vendor" / "fhe-runtime"
+_FHE_LINK_TARGETS = {
+    "skf": _FHE_RUNTIME / "crypto_toolkit-64_dev" / "crypto_toolkit" / "file" / "skf",
+    "dictf": _FHE_RUNTIME / "henumpy-dev" / "henumpy" / "file" / "dictf",
+    "user_authorization": _FHE_RUNTIME / "henumpy-dev" / "henumpy" / "file" / "user_authorization",
+}
+
+
+def _fhe_link(name: str) -> None:
+    """Symlink data/fhe-keys/<name> into the vendored package's file/ dir."""
+    src = FHE_DIR / name
+    dst = _FHE_LINK_TARGETS.get(name)
+    if dst is None or not src.exists():
+        return
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if dst.exists() or dst.is_symlink():
+            dst.unlink()
+        dst.symlink_to(src.resolve())
+    except Exception:
+        pass
+
+
+def _fhe_unlink(name: str) -> None:
+    dst = _FHE_LINK_TARGETS.get(name)
+    if dst is not None and (dst.exists() or dst.is_symlink()):
+        try:
+            dst.unlink()
+        except Exception:
+            pass
 
 
 def fhe_status() -> list[dict]:
@@ -220,12 +390,14 @@ def fhe_save(name: str, data: bytes) -> dict:
         p.chmod(0o400)
     except Exception:
         pass
+    _fhe_link(name)  # 自动放置到 vendor 包 file/ 目录
     return {"name": name, "size": p.stat().st_size}
 
 
 def fhe_delete(name: str) -> bool:
     if name not in FHE_KEY_NAMES:
         raise ValueError(f"invalid key name: {name}")
+    _fhe_unlink(name)
     p = FHE_DIR / name
     if p.exists():
         p.unlink()

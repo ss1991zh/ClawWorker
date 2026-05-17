@@ -1,0 +1,9 @@
+.pytest_cache/
+.vscode/
+build/
+dist/
+helearn.egg-info/
+*.pyc
+*.log
+test/
+.pytest_cache/

@@ -1,0 +1,16 @@
+include *.json
+include *.csv
+include *.gz
+include *.txt
+recursive-include doc *
+recursive-include examples *
+recursive-include helearn/base *
+recursive-include helearn/datasets *
+recursive-include helearn/doc *
+recursive-include helearn/linear_model *
+recursive-include helearn/metrics *
+recursive-include helearn/preprocessing *
+recursive-include helearn/tree *
+recursive-include helearn/utils *
+recursive-include tools *
+include MANIFEST.in

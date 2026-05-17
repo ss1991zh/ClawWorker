@@ -1,0 +1,5 @@
+pandaseal.egg-info/
+*pyc
+pandaseal/classes*
+pandaseal/packages.dot
+build/*

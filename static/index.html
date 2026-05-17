@@ -337,7 +337,22 @@
       .list-item {
         display: flex; align-items: center; gap: 10px; padding: 12px;
         border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px;
+        transition: border-color 0.15s, background 0.15s;
       }
+      .list-item.fhe-drop.dragover {
+        border-color: var(--blue); border-style: dashed;
+        background: var(--blue-light);
+      }
+      .sk-drop {
+        border: 2px dashed var(--border); border-radius: 14px;
+        padding: 30px 20px; text-align: center; color: var(--text-muted);
+        transition: border-color 0.15s, background 0.15s;
+      }
+      .sk-drop.dragover { border-color: var(--blue); background: var(--blue-light); color: var(--blue); }
+      .sk-drop__ic { color: var(--blue); opacity: 0.8; margin-bottom: 8px; }
+      .sk-drop__t { font-size: 15px; color: var(--text); }
+      .sk-drop__s { font-size: 13px; margin-top: 6px; }
+      .sk-pick { color: var(--blue); cursor: pointer; text-decoration: underline; }
       .list-item .grow { flex: 1; min-width: 0; }
       .list-item .grow .t { font-weight: 600; font-size: 14px; }
       .list-item .grow .d { font-size: 12px; color: var(--text-muted); margin-top: 2px;
@@ -946,45 +961,143 @@
       }
 
       // --- Skill 管理 ---
+      const skMsg = (t, c) => { const m = $("skMsg"); if (m) { m.textContent = t; m.style.color = c || "var(--text-muted)"; } };
+
+      function fileToB64(file) {
+        return new Promise((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(r.result.split(",")[1] || "");
+          r.onerror = reject;
+          r.readAsDataURL(file);
+        });
+      }
+
+      // 递归读取一个 webkit FileSystemEntry，收集 {path, file}
+      function walkEntry(entry, base, acc) {
+        return new Promise((resolve) => {
+          if (entry.isFile) {
+            entry.file((f) => { acc.push({ path: base + entry.name, file: f }); resolve(); });
+          } else if (entry.isDirectory) {
+            const reader = entry.createReader();
+            const readAll = () => reader.readEntries(async (ents) => {
+              if (!ents.length) return resolve();
+              for (const e of ents) await walkEntry(e, base + entry.name + "/", acc);
+              readAll();
+            });
+            readAll();
+          } else resolve();
+        });
+      }
+
+      async function installBundle(collected) {
+        // collected: [{path, file}]
+        const skipped = /(^|\/)(\.DS_Store|__MACOSX|\.git)(\/|$)/i;
+        const wanted = collected.filter((c) => !skipped.test(c.path));
+        if (!wanted.some((c) => /(^|\/)SKILL\.md$/i.test(c.path))) {
+          skMsg("✗ 未找到 SKILL.md（文件夹内每个技能需含一个 SKILL.md）", "#dc2626");
+          return;
+        }
+        skMsg(`正在读取 ${wanted.length} 个文件并校验…`);
+        const files = [];
+        for (const c of wanted) files.push({ path: c.path, b64: await fileToB64(c.file) });
+        const res = await fetch("/api/skills/upload", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ files }),
+        });
+        const data = await res.json();
+        if (!res.ok) { skMsg("✗ " + (data.detail || "安装失败"), "#dc2626"); return; }
+        const oks = data.skills.filter((s) => s.ok);
+        const bad = data.skills.filter((s) => !s.ok);
+        let m = `✓ 安装 ${oks.length}/${data.total} 个技能` +
+          (oks.length ? "：" + oks.map((s) => `${s.name}(${s.fileCount}文件)`).join("、") : "");
+        if (bad.length) m += `；✗ 跳过：` + bad.map((s) => `${s.name}（${s.error}）`).join("、");
+        skMsg(m, bad.length ? "#b45309" : "#16a34a");
+        setTimeout(renderSkillsTab, 900);
+      }
+
+      async function addSkillFromFile(file) {
+        // 单个 SKILL.md 文件：包装成 bundle 走同一通道
+        if (!/\.(md|markdown|txt)$/i.test(file.name)) {
+          skMsg("✗ 单文件仅支持 .md（或拖拽整个技能文件夹）", "#dc2626"); return;
+        }
+        skMsg("正在校验格式…");
+        await installBundle([{ path: "SKILL.md", file }]);
+      }
+
       async function renderSkillsTab() {
         const skills = await api("/api/skills");
         modalBody.innerHTML = `
           <h2>Skill 管理</h2>
-          <div class="sub">管理 SKILL.md 技能文件（供 Agent 按需读取）。</div>
+          <div class="sub">管理技能（OpenClaw 规范：每个技能为一个目录，含 SKILL.md + references/scripts/templates/assets）。支持<b>拖拽整个文件夹</b>（可含多个技能），校验通过后自动入列。</div>
           <div id="skList">${skills.map((s) => `
-            <div class="list-item"><div class="grow"><div class="t">${esc(s.name)}</div>
+            <div class="list-item"><div class="grow"><div class="t">${esc(s.name)}
+            ${s.fileCount>1?`<span style="font-size:11px;color:var(--text-muted)">· ${s.fileCount} 个文件</span>`:""}</div>
             <div class="d">${esc(s.description||"（无描述）")}</div></div>
             <button class="btn-ghost btn-danger" data-del="${esc(s.id)}">删除</button></div>`
-          ).join("") || '<div class="sub">暂无技能</div>'}</div>
+          ).join("") || '<div class="sub" style="margin-bottom:8px">暂无技能</div>'}</div>
           <hr style="border:none;border-top:1px solid var(--border);margin:18px 0">
-          <div class="field"><label>新增技能 ID</label><input id="skId" placeholder="如 weather-skill"></div>
-          <div class="field"><label>SKILL.md 内容</label>
-            <textarea id="skBody" placeholder="---\\nname: weather-skill\\ndescription: 查询天气\\n---\\n\\n# 说明..."></textarea></div>
-          <button class="btn-primary" id="addSk">添加技能</button>`;
+          <div id="skDrop" class="sk-drop">
+            <div class="sk-drop__ic">
+              <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            </div>
+            <div class="sk-drop__t">把 <b>技能文件夹</b>（或单个 SKILL.md）拖到这里</div>
+            <div class="sk-drop__s">或 <label class="sk-pick">选择文件夹<input type="file" id="skDir" webkitdirectory directory multiple hidden></label>
+            ／ <label class="sk-pick">选择单文件<input type="file" id="skFile" accept=".md,.markdown,.txt" hidden></label></div>
+          </div>
+          <div id="skMsg" style="margin-top:12px;font-size:13px;color:var(--text-muted)"></div>
+          <div class="sub" style="margin-top:14px;font-size:12px">规范：技能目录内 <code>SKILL.md</code> 的 frontmatter 须含 <code>name</code>、<code>description</code> 且有正文；可附带 references/scripts/templates/assets 等关联文件，整目录一并安装。</div>`;
         modalBody.querySelectorAll("[data-del]").forEach((b) =>
           b.onclick = async () => { if (confirm("删除该技能？")) {
-            await fetch("/api/skills/" + b.dataset.del, { method: "DELETE" }); renderSkillsTab(); } });
-        $("addSk").onclick = async () => {
-          const id = $("skId").value.trim(); if (!id) return alert("请输入技能 ID");
-          await api("/api/skills", { method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id, content: $("skBody").value }) });
-          renderSkillsTab();
+            await fetch("/api/skills/" + encodeURIComponent(b.dataset.del), { method: "DELETE" }); renderSkillsTab(); } });
+        $("skFile").onchange = (e) => { const f = e.target.files[0]; if (f) addSkillFromFile(f); };
+        // 文件夹选择（webkitdirectory：file.webkitRelativePath 含目录结构）
+        $("skDir").onchange = (e) => {
+          const fs = Array.from(e.target.files || []);
+          if (!fs.length) return;
+          installBundle(fs.map((f) => ({ path: f.webkitRelativePath || f.name, file: f })));
         };
+        const dz = $("skDrop");
+        dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("dragover"); });
+        dz.addEventListener("dragleave", (e) => { if (!dz.contains(e.relatedTarget)) dz.classList.remove("dragover"); });
+        dz.addEventListener("drop", async (e) => {
+          e.preventDefault(); dz.classList.remove("dragover");
+          const items = e.dataTransfer.items ? Array.from(e.dataTransfer.items) : [];
+          const entries = items.map((it) => it.webkitGetAsEntry && it.webkitGetAsEntry()).filter(Boolean);
+          if (entries.length) {
+            skMsg("正在读取文件夹…");
+            const acc = [];
+            for (const en of entries) await walkEntry(en, "", acc);
+            await installBundle(acc);
+          } else {
+            const f = e.dataTransfer.files && e.dataTransfer.files[0];
+            if (f) addSkillFromFile(f);
+          }
+        });
       }
 
       // --- 同态密钥 ---
+      async function uploadFheFile(name, file) {
+        const buf = new Uint8Array(await file.arrayBuffer());
+        let bin = ""; const CH = 0x8000;
+        for (let i = 0; i < buf.length; i += CH)
+          bin += String.fromCharCode.apply(null, buf.subarray(i, i + CH));
+        await api("/api/fhe-keys", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, dataBase64: btoa(bin) }) });
+        renderFheTab();
+      }
+
       async function renderFheTab() {
         const ks = await api("/api/fhe-keys");
         const labels = { skf: "SKF 私钥", dictf: "运算字典", user_authorization: "授权许可" };
         modalBody.innerHTML = `
           <h2>同态密钥管理</h2>
-          <div class="sub">FHE 密态计算所需的三份本地密钥文件，仅保存在本机。</div>
+          <div class="sub">FHE 密态计算所需的三份本地密钥文件，仅保存在本机。可点击「上传」或<b>直接拖拽文件</b>到对应行；上传后自动放置到运行时目录。</div>
           ${ks.every((k) => k.present) ? '<div class="badge ok" style="display:inline-block;margin-bottom:16px">✓ 全部就绪</div>'
             : '<div class="badge warn" style="display:inline-block;margin-bottom:16px">⚠ 未完全就绪</div>'}
           ${ks.map((k) => `
-            <div class="list-item">
+            <div class="list-item fhe-drop" data-drop="${k.name}">
               <div class="grow"><div class="t">${labels[k.name]||k.name} <code style="font-size:11px;color:var(--text-muted)">${k.name}</code></div>
-              <div class="d">${k.present ? `${(k.size/1024).toFixed(1)} KB · ${k.mtime}` : "未上传"}</div></div>
+              <div class="d">${k.present ? `${(k.size/1024).toFixed(1)} KB · ${k.mtime}` : "拖拽文件到此处，或点击上传"}</div></div>
               <span class="badge ${k.present?"ok":"no"}">${k.present?"已上传":"缺失"}</span>
               <label class="btn-ghost">上传<input type="file" hidden data-up="${k.name}"></label>
               ${k.present ? `<button class="btn-ghost btn-danger" data-rm="${k.name}">删除</button>` : ""}
@@ -992,17 +1105,26 @@
         modalBody.querySelectorAll("[data-up]").forEach((inp) =>
           inp.onchange = async (e) => {
             const f = e.target.files[0]; if (!f) return;
-            const buf = new Uint8Array(await f.arrayBuffer());
-            let bin = ""; const CH = 0x8000;
-            for (let i = 0; i < buf.length; i += CH)
-              bin += String.fromCharCode.apply(null, buf.subarray(i, i + CH));
-            await api("/api/fhe-keys", { method: "POST", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ name: inp.dataset.up, dataBase64: btoa(bin) }) });
-            renderFheTab();
+            await uploadFheFile(inp.dataset.up, f);
           });
         modalBody.querySelectorAll("[data-rm]").forEach((b) =>
           b.onclick = async () => { if (confirm("删除该密钥？")) {
             await fetch("/api/fhe-keys/" + b.dataset.rm, { method: "DELETE" }); renderFheTab(); } });
+        // 拖拽上传
+        modalBody.querySelectorAll(".fhe-drop").forEach((row) => {
+          const name = row.dataset.drop;
+          row.addEventListener("dragover", (e) => {
+            e.preventDefault(); row.classList.add("dragover");
+          });
+          row.addEventListener("dragleave", (e) => {
+            if (!row.contains(e.relatedTarget)) row.classList.remove("dragover");
+          });
+          row.addEventListener("drop", async (e) => {
+            e.preventDefault(); row.classList.remove("dragover");
+            const f = e.dataTransfer.files && e.dataTransfer.files[0];
+            if (f) await uploadFheFile(name, f);
+          });
+        });
       }
 
       loadSessions();

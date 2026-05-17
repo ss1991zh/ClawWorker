@@ -1,0 +1,12 @@
+include *.json
+include *.csv
+include *.gz
+include *.txt
+recursive-include doc *
+recursive-include henumpy/base *
+recursive-include henumpy/core *
+recursive-include henumpy/file *
+recursive-include henumpy/doc *
+recursive-include henumpy/lib *
+recursive-include tools *
+include MANIFEST.in

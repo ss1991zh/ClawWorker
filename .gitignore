@@ -1,5 +1,6 @@
 # Python
 .venv/
+.venv-fhe/
 __pycache__/
 *.pyc
 *.pyo
@@ -9,3 +10,13 @@ data/
 
 # OS
 .DS_Store
+
+# FHE 用户密钥（绝不入库；由配置中心管理，存 data/fhe-keys/）
+vendor/fhe-runtime/crypto_toolkit-64_dev/crypto_toolkit/file/skf
+vendor/fhe-runtime/henumpy-dev/henumpy/file/dictf
+vendor/fhe-runtime/henumpy-dev/henumpy/file/user_authorization
+
+# 任何位置的密钥文件一律不入库（含 vendor 自带示例）
+**/skf
+**/dictf
+**/user_authorization

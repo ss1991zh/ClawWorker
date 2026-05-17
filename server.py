@@ -360,8 +360,8 @@ def limit_status():
 
 # ===== skills =====
 class SkillBody(BaseModel):
-    id: str
     content: str
+    id: str | None = None  # 可选；缺省时按 frontmatter 的 name 推导
 
 
 @app.get("/api/skills")
@@ -371,13 +371,32 @@ def get_skills():
 
 @app.post("/api/skills")
 def post_skill(b: SkillBody):
-    if not b.id.strip():
-        raise HTTPException(400, "skill id required")
-    stores.add_skill(b.id.strip(), b.content)
-    return {"ok": True}
+    ok, err, name, desc = stores.validate_skill(b.content or "")
+    if not ok:
+        raise HTTPException(400, f"SKILL.md 格式校验失败：{err}")
+    skill_id = (b.id or "").strip() or name
+    stores.add_skill(skill_id, b.content)
+    return {"ok": True, "id": skill_id, "name": name, "description": desc}
 
 
-@app.delete("/api/skills/{sid}")
+class SkillBundle(BaseModel):
+    # [{path: "skillA/SKILL.md", b64: "..."}, ...]
+    files: list[dict]
+
+
+@app.post("/api/skills/upload")
+def post_skill_bundle(b: SkillBundle):
+    """Install one or more skills from a dropped folder (multi-file skills,
+    OpenClaw spec: SKILL.md + references/scripts/templates/assets)."""
+    if not b.files:
+        raise HTTPException(400, "未收到任何文件")
+    result = stores.install_skill_bundle(b.files)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "未找到有效的 SKILL.md")
+    return result
+
+
+@app.delete("/api/skills/{sid:path}")
 def del_skill(sid: str):
     return {"ok": stores.delete_skill(sid)}
 
