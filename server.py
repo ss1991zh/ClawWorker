@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 import httpx
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.sqlite import SqliteSaver
 from pydantic import BaseModel
@@ -152,6 +152,7 @@ def delete_session(sid: str):
             _conn.commit()
     except Exception:
         pass
+    stores.delete_traces(sid)
     return {"ok": True}
 
 
@@ -165,13 +166,27 @@ def get_messages(sid: str):
         return []
     state = ag.get_state({"configurable": {"thread_id": sid}})
     msgs = state.values.get("messages", []) if state and state.values else []
-    out = []
+    traces = stores.get_traces(sid)
+    out: list = []
+    last_ai = None
+    turn = 0
+
+    def flush():
+        nonlocal last_ai, turn
+        if last_ai is not None:
+            tr = traces[turn] if turn < len(traces) else []
+            out.append({"role": "assistant", "text": last_ai, "trace": tr})
+            turn += 1
+            last_ai = None
+
     for m in msgs:
         r = getattr(m, "type", "")
         if r == "human":
+            flush()  # close previous turn's assistant answer
             out.append({"role": "user", "text": m.content})
         elif r == "ai" and getattr(m, "content", ""):
-            out.append({"role": "assistant", "text": m.content})
+            last_ai = m.content  # keep latest; final one is the answer
+    flush()
     return out
 
 
@@ -220,14 +235,21 @@ def chat(req: ChatRequest):
             continue
         tcs = getattr(m, "tool_calls", None)
         if tcs:
+            # 中间 AI 消息：先记思考文本（若有），再记工具调用
+            if r == "ai" and m.content:
+                trace.append({"kind": "thinking", "text": str(m.content)})
             for tc in tcs:
                 trace.append({"kind": "tool-call", "text": f"{tc['name']}({tc['args']})"})
         elif r == "tool":
             trace.append({"kind": "tool-result", "text": str(m.content)})
         elif r == "ai" and m.content:
+            # 最终回答；上一个被当作 answer 的中间内容降级为思考
+            if answer:
+                trace.append({"kind": "thinking", "text": answer})
             answer = m.content
 
     stores.record_usage(req.session_id, cfg.get("activeModel", "?"), in_tok, out_tok)
+    stores.append_trace(req.session_id, trace)  # 持久化，刷新后可重看
 
     with _lock:
         s = _load_sessions()
@@ -248,6 +270,116 @@ def chat(req: ChatRequest):
         "usage": {"in": in_tok, "out": out_tok},
         "alert": summary["alert"],
     }
+
+
+@app.post("/api/chat/stream")
+def chat_stream(req: ChatRequest):
+    """Streaming variant: emits SSE events for each trace step as the agent
+    executes (思考/调用/结果 逐步显示), then a final `done` event."""
+    text = (req.message or "").strip()
+    if not text:
+        raise HTTPException(400, "empty message")
+    with _lock:
+        if not _find(_load_sessions(), req.session_id):
+            raise HTTPException(404, "session not found")
+
+    def sse(obj: dict) -> str:
+        return "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
+
+    def gen():
+        over, today_tok, limit = _over_limit()
+        if over and not req.override:
+            yield sse(
+                {
+                    "t": "blocked",
+                    "message": (
+                        f"今日 Token 用量已达到上限（{today_tok:,} / {limit:,}）。\n"
+                        "为控制成本，已暂停继续调用。你可以选择继续使用（忽略今日上限），"
+                        "或等待明日 0 点自动重置。"
+                    ),
+                }
+            )
+            return
+
+        cfg = stores.load_config()
+        ag = get_agent()
+        if ag is None:
+            yield sse({"t": "error", "message": "尚未配置大模型，请在「配置中心 → 大模型配置」填写 API 并保存。"})
+            return
+
+        config = {"configurable": {"thread_id": req.session_id}}
+        trace: list = []
+        answer = ""
+        in_tok = out_tok = 0
+        try:
+            for chunk in ag.stream(
+                {"messages": [{"role": "user", "content": text}]},
+                config,
+                stream_mode="updates",
+            ):
+                for _node, upd in (chunk or {}).items():
+                    msgs = (upd or {}).get("messages", []) if isinstance(upd, dict) else []
+                    for m in msgs:
+                        r = getattr(m, "type", "")
+                        um = getattr(m, "usage_metadata", None)
+                        if um:
+                            in_tok += um.get("input_tokens", 0) or 0
+                            out_tok += um.get("output_tokens", 0) or 0
+                        tcs = getattr(m, "tool_calls", None)
+                        if tcs:
+                            if r == "ai" and m.content:
+                                step = {"kind": "thinking", "text": str(m.content)}
+                                trace.append(step)
+                                yield sse({"t": "step", **step})
+                            for tc in tcs:
+                                step = {
+                                    "kind": "tool-call",
+                                    "text": f"{tc['name']}({tc['args']})",
+                                }
+                                trace.append(step)
+                                yield sse({"t": "step", **step})
+                        elif r == "tool":
+                            step = {"kind": "tool-result", "text": str(m.content)}
+                            trace.append(step)
+                            yield sse({"t": "step", **step})
+                        elif r == "ai" and m.content:
+                            if answer:
+                                step = {"kind": "thinking", "text": answer}
+                                trace.append(step)
+                                yield sse({"t": "step", **step})
+                            answer = m.content
+        except Exception as exc:  # pragma: no cover
+            yield sse({"t": "error", "message": f"模型调用失败：{exc}"})
+            return
+
+        stores.record_usage(req.session_id, cfg.get("activeModel", "?"), in_tok, out_tok)
+        stores.append_trace(req.session_id, trace)
+        with _lock:
+            s = _load_sessions()
+            meta = _find(s, req.session_id)
+            title = "新会话"
+            if meta:
+                if meta["title"] == "新会话":
+                    meta["title"] = text[:20] + ("…" if len(text) > 20 else "")
+                meta["updated_at"] = _now()
+                _save_sessions(s)
+                title = meta["title"]
+        summary = stores.usage_summary()
+        yield sse(
+            {
+                "t": "done",
+                "answer": answer or "（无回复）",
+                "title": title,
+                "usage": {"in": in_tok, "out": out_tok},
+                "alert": summary["alert"],
+            }
+        )
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ===== config: providers / model / alert =====

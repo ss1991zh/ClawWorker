@@ -148,9 +148,9 @@
         max-width: min(78%, 620px); align-items: flex-start;
       }
       .msg.user .msg__content { align-items: flex-end; }
-      /* 回复消息：左边界不变，右边界延伸到与提问头像对齐（整列宽度）*/
-      .msg.bot .msg__content { max-width: 100%; }
-      .msg.bot .bubble { width: 100%; max-width: 100%; }
+      /* 回复消息：占满整列宽度，右边界与提问消息列对齐（图表等满宽）*/
+      .msg.bot .msg__content { max-width: 100%; flex: 1 1 auto; width: 100%; }
+      .msg.bot .bubble { width: 100%; max-width: 100%; box-sizing: border-box; }
       .bubble {
         width: fit-content; max-width: 100%;
         padding: 12px 16px; border-radius: var(--radius);
@@ -181,6 +181,26 @@
         border: 1px solid var(--border); border-radius: 10px;
         overflow-x: auto; margin: 10px 0;
       }
+      .chart-box {
+        margin: 12px 0; padding: 10px; border: 1px solid var(--border);
+        border-radius: 12px; background: #fff;
+        width: 100%; box-sizing: border-box; cursor: zoom-in;
+        transition: box-shadow 0.15s;
+      }
+      .chart-box:hover { box-shadow: 0 2px 12px rgba(37,99,235,0.18); }
+      .chart-box svg.cw-chart { width: 100%; height: auto; display: block; }
+      .chart-modal {
+        position: fixed; inset: 0; z-index: 40;
+        background: rgba(15,23,42,0.55);
+        display: flex; align-items: center; justify-content: center;
+        padding: 28px;
+      }
+      .chart-modal__inner {
+        background: #fff; border-radius: 16px; padding: 20px;
+        width: min(960px, 94vw); max-height: 90vh; overflow: auto;
+        box-shadow: 0 24px 70px rgba(15,23,42,0.35); cursor: default;
+      }
+      .chart-modal__inner svg.cw-chart { width: 100%; height: auto; display: block; }
       .bubble.md pre code { background: transparent; color: inherit; padding: 0; font-size: 0.86em; }
       .bubble.md a { color: var(--blue); text-decoration: underline; }
       .bubble.md blockquote {
@@ -196,12 +216,18 @@
       /* 一问一答为一轮，新一轮提问前留更大间距 */
       .msg.bot + .msg.user { margin-top: 26px; }
 
-      .trace { margin-top: 8px; font-size: 12px; color: var(--text-muted); }
-      .trace details { background: var(--blue-light); border-radius: 10px; padding: 6px 12px; }
-      .trace summary { cursor: pointer; color: var(--blue); user-select: none; }
-      .trace .step { padding: 4px 0; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
-      .trace .step.call::before { content: "→ "; }
-      .trace .step.result::before { content: "✓ "; color: #16a34a; }
+      .trace { margin: 0 0 10px; font-size: 12px; color: var(--text-muted); }
+      .trace details { background: var(--blue-light); border-radius: 10px; padding: 8px 14px; }
+      .trace summary { cursor: pointer; color: var(--blue); user-select: none; font-weight: 500; }
+      .trace .steps { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+      .trace .step { padding: 6px 8px; border-radius: 6px; background: rgba(255,255,255,0.6);
+        white-space: pre-wrap; word-break: break-word; line-height: 1.55; }
+      .trace .step.think { color: var(--text); }
+      .trace .step.think::before { content: "💭 思考  "; color: var(--blue); font-weight: 600; }
+      .trace .step.call { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+      .trace .step.call::before { content: "→ 调用  "; font-family: inherit; color: var(--blue); font-weight: 600; }
+      .trace .step.result { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--text-secondary, #475569); }
+      .trace .step.result::before { content: "✓ 结果  "; font-family: inherit; color: #16a34a; font-weight: 600; }
 
       .typing { display: flex; gap: 4px; padding: 4px 0; }
       .typing span { width: 7px; height: 7px; border-radius: 50%; background: var(--blue-ring);
@@ -221,7 +247,9 @@
         padding: 13px 16px; font-size: 15px; font-family: inherit; line-height: 1.5;
         max-height: 140px; outline: none; background: var(--bg);
         transition: border-color 0.15s, box-shadow 0.15s;
+        scrollbar-width: none; -ms-overflow-style: none;
       }
+      textarea::-webkit-scrollbar { width: 0; height: 0; display: none; }
       textarea:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(37,99,235,0.12); background: #fff; }
       button.send {
         background: var(--blue); color: #fff; border: none; border-radius: 14px;
@@ -486,6 +514,100 @@
           .replace(/ on\w+='[^']*'/gi, "")
           .replace(/javascript:/gi, "");
       }
+      // 打字阶段隐藏 ```chart 原文，替换为占位提示；完成后再渲染真图表
+      function stripChartForTyping(text) {
+        return String(text || "").replace(
+          /```chart[\s\S]*?```/gi,
+          "\n📊 图表生成中…\n"
+        );
+      }
+
+      // ===== 图表渲染：```chart {json} ``` → 内联 SVG（柱状/折线）=====
+      const CHART_COLORS = ["#2563eb", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4"];
+      function chartSVG(spec) {
+        const type = (spec.type || "bar").toLowerCase();
+        const labels = Array.isArray(spec.labels) && spec.labels.length
+          ? spec.labels.map(String)
+          : (spec.data || (spec.series && spec.series[0] && spec.series[0].data) || [])
+              .map((_, i) => String(i + 1));
+        let series = spec.series;
+        if (!Array.isArray(series) || !series.length) {
+          series = [{ name: spec.name || "数值", data: spec.data || [] }];
+        }
+        series = series.map((s) => ({ name: s.name || "", data: (s.data || []).map(Number) }));
+        const W = 640, H = 340, L = 52, R = 18, T = spec.title ? 42 : 22, B = 54;
+        const iw = W - L - R, ih = H - T - B;
+        const allv = series.flatMap((s) => s.data);
+        let yMax = Math.max(1, ...allv), yMin = Math.min(0, ...allv);
+        const span = yMax - yMin || 1;
+        const x = (i) => L + (labels.length <= 1 ? iw / 2 : (i * iw) / (labels.length - 1));
+        const xb = (i) => L + (i + 0.5) * (iw / labels.length);
+        const y = (v) => T + ih - ((v - yMin) / span) * ih;
+        let el = `<svg viewBox="0 0 ${W} ${H}" class="cw-chart" xmlns="http://www.w3.org/2000/svg">`;
+        if (spec.title)
+          el += `<text x="${W / 2}" y="22" text-anchor="middle" font-size="15" font-weight="600" fill="#1e293b">${esc(spec.title)}</text>`;
+        // y 轴网格 + 刻度
+        for (let g = 0; g <= 4; g++) {
+          const val = yMin + (span * g) / 4, yy = y(val);
+          el += `<line x1="${L}" y1="${yy}" x2="${W - R}" y2="${yy}" stroke="#e2e8f0" stroke-width="1"/>`;
+          el += `<text x="${L - 8}" y="${yy + 4}" text-anchor="end" font-size="10" fill="#94a3b8">${(Math.round(val * 100) / 100)}</text>`;
+        }
+        // x 轴标签
+        labels.forEach((lb, i) => {
+          const xx = type === "bar" ? xb(i) : x(i);
+          el += `<text x="${xx}" y="${H - B + 18}" text-anchor="middle" font-size="10" fill="#64748b">${esc(lb)}</text>`;
+        });
+        if (type === "line") {
+          series.forEach((s, si) => {
+            const c = CHART_COLORS[si % CHART_COLORS.length];
+            const pts = s.data.map((v, i) => `${x(i)},${y(v)}`).join(" ");
+            el += `<polyline points="${pts}" fill="none" stroke="${c}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+            s.data.forEach((v, i) => {
+              el += `<circle cx="${x(i)}" cy="${y(v)}" r="3.5" fill="#fff" stroke="${c}" stroke-width="2"/>`;
+              el += `<text x="${x(i)}" y="${y(v) - 9}" text-anchor="middle" font-size="10" fill="${c}" font-weight="600">${v}</text>`;
+            });
+          });
+        } else {
+          const gw = iw / labels.length, ns = series.length;
+          const bw = Math.min(46, (gw * 0.7) / ns);
+          series.forEach((s, si) => {
+            const c = CHART_COLORS[si % CHART_COLORS.length];
+            s.data.forEach((v, i) => {
+              const cx = L + i * gw + gw / 2 + (si - (ns - 1) / 2) * (bw + 3);
+              const yy = y(v), y0 = y(0);
+              const top = Math.min(yy, y0), hgt = Math.max(2, Math.abs(y0 - yy));
+              el += `<rect x="${cx - bw / 2}" y="${top}" width="${bw}" height="${hgt}" rx="3" fill="${c}"><title>${esc(s.name)} ${esc(labels[i])}: ${v}</title></rect>`;
+              el += `<text x="${cx}" y="${top - 5}" text-anchor="middle" font-size="10" fill="#475569" font-weight="600">${v}</text>`;
+            });
+          });
+        }
+        // 图例（多系列）
+        if (series.length > 1 && series.some((s) => s.name)) {
+          let lx = L;
+          el += `<g font-size="11" fill="#475569">`;
+          series.forEach((s, si) => {
+            const c = CHART_COLORS[si % CHART_COLORS.length];
+            el += `<rect x="${lx}" y="${H - 14}" width="11" height="11" rx="2" fill="${c}"/>`;
+            el += `<text x="${lx + 16}" y="${H - 5}">${esc(s.name || "系列" + (si + 1))}</text>`;
+            lx += 16 + (s.name || "系列1").length * 9 + 22;
+          });
+          el += `</g>`;
+        }
+        return el + "</svg>";
+      }
+      function enhanceCharts(rootEl) {
+        if (!rootEl) return;
+        rootEl.querySelectorAll("pre > code.language-chart, pre > code.lang-chart").forEach((code) => {
+          let spec;
+          try { spec = JSON.parse(code.textContent.trim()); } catch { return; }
+          const box = document.createElement("div");
+          box.className = "chart-box";
+          try { box.innerHTML = chartSVG(spec); } catch { return; }
+          const pre = code.closest("pre");
+          if (pre && pre.parentNode) pre.parentNode.replaceChild(box, pre);
+        });
+      }
+
       // Flat stroke icons (Feather/Lucide style)
       const svg = (p) =>
         `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
@@ -524,6 +646,7 @@
         if (role === "bot") {
           bubble.classList.add("md");
           bubble.innerHTML = renderMd(text);
+          enhanceCharts(bubble);
         } else {
           bubble.textContent = text;
         }
@@ -551,26 +674,140 @@
         scrollDown();
 
         const full = String(text || "");
+        const disp = stripChartForTyping(full);  // 打字阶段不显示 chart 原文
         // 快速打字：按长度自适应步长，长文本总时长封顶 ~2.5s
-        const step = Math.max(2, Math.ceil(full.length / 220));
+        const step = Math.max(2, Math.ceil(disp.length / 220));
         let i = 0;
         const atBottom = () =>
           main.scrollHeight - main.scrollTop - main.clientHeight < 80;
         const done = new Promise((resolve) => {
           const timer = setInterval(() => {
             i += step;
-            bubble.textContent = full.slice(0, i);
+            bubble.textContent = disp.slice(0, i);
             if (atBottom()) main.scrollTop = main.scrollHeight;
-            if (i >= full.length) {
+            if (i >= disp.length) {
               clearInterval(timer);
               bubble.classList.add("md");
               bubble.innerHTML = renderMd(full);
+              enhanceCharts(bubble);
               if (atBottom()) main.scrollTop = main.scrollHeight;
               resolve();
             }
           }, 14);
         });
         return { wrap, done };
+      }
+
+      // 流式：先建空 bot 消息（trace 实时追加），最后把回答打字进同一消息
+      function startBotMessage() {
+        welcome.style.display = "none";
+        const msg = document.createElement("div");
+        msg.className = "msg bot";
+        const av = document.createElement("div");
+        av.className = "avatar"; av.textContent = "助";
+        const wrap = document.createElement("div");
+        wrap.className = "msg__content";
+        msg.append(av, wrap);
+        chat.appendChild(msg);
+        scrollDown();
+        return wrap;
+      }
+
+      // 可增量追加步骤的折叠 trace 块：每步打字机显示，全部完成后自动折叠
+      function makeLiveTrace(wrap) {
+        const box = document.createElement("div");
+        box.className = "trace";
+        const det = document.createElement("details");
+        det.open = true;
+        const sum = document.createElement("summary");
+        const list = document.createElement("div");
+        list.className = "steps";
+        det.append(sum, list);
+        box.appendChild(det);
+        wrap.appendChild(box);
+        const counts = { thinking: 0, "tool-call": 0, "tool-result": 0, n: 0 };
+        const refresh = () => {
+          sum.textContent =
+            `思考与工具调用记录（${counts.n} 步` +
+            (counts.thinking ? ` · ${counts.thinking} 思考` : "") +
+            (counts["tool-call"] ? ` · ${counts["tool-call"]} 调用` : "") + "）";
+        };
+        refresh();
+
+        const queue = [];
+        let busy = false;
+        let drainResolve = null;
+        const atBottom = () =>
+          main.scrollHeight - main.scrollTop - main.clientHeight < 140;
+
+        function typeStep(s) {
+          counts.n++; if (counts[s.kind] != null) counts[s.kind]++;
+          refresh();
+          const d = document.createElement("div");
+          d.className = "step " + (s.kind === "tool-call" ? "call"
+            : s.kind === "tool-result" ? "result" : "think");
+          list.appendChild(d);
+          const full = String(s.text || "");
+          const per = Math.max(1, Math.ceil(full.length / 43)); // 每步 ~0.6s
+          let i = 0;
+          return new Promise((resolve) => {
+            const t = setInterval(() => {
+              i += per;
+              d.textContent = full.slice(0, i);
+              if (atBottom()) main.scrollTop = main.scrollHeight;
+              if (i >= full.length) {
+                clearInterval(t);
+                d.textContent = full;
+                if (atBottom()) main.scrollTop = main.scrollHeight;
+                resolve();
+              }
+            }, 14);
+          });
+        }
+        async function pump() {
+          if (busy) return;
+          busy = true;
+          while (queue.length) await typeStep(queue.shift());
+          busy = false;
+          if (drainResolve) { drainResolve(); drainResolve = null; }
+        }
+        return {
+          add(s) { queue.push(s); pump(); },
+          waitDrain() {
+            return new Promise((r) => {
+              if (!busy && !queue.length) return r();
+              drainResolve = r;
+            });
+          },
+          collapse() { det.open = false; },
+        };
+      }
+
+      // 把回答打字进已有 wrap（trace 下方），返回 Promise
+      function typeAnswerInto(wrap, text) {
+        const bubble = document.createElement("div");
+        bubble.className = "bubble";
+        wrap.appendChild(bubble);
+        const full = String(text || "");
+        const disp = stripChartForTyping(full);  // 打字阶段不显示 chart 原文
+        const step = Math.max(2, Math.ceil(disp.length / 220));
+        let i = 0;
+        const atBottom = () => main.scrollHeight - main.scrollTop - main.clientHeight < 80;
+        return new Promise((resolve) => {
+          const timer = setInterval(() => {
+            i += step;
+            bubble.textContent = disp.slice(0, i);
+            if (atBottom()) main.scrollTop = main.scrollHeight;
+            if (i >= disp.length) {
+              clearInterval(timer);
+              bubble.classList.add("md");
+              bubble.innerHTML = renderMd(full);
+              enhanceCharts(bubble);
+              if (atBottom()) main.scrollTop = main.scrollHeight;
+              resolve();
+            }
+          }, 14);
+        });
       }
 
       function addTyping() {
@@ -581,21 +818,34 @@
       }
       const removeTyping = () => $("typing")?.remove();
 
-      function renderTrace(wrap, trace) {
+      // 折叠的「思考与工具调用」记录块（放在回答前），返回 DOM 节点或 null
+      function renderTraceBlock(trace) {
         const steps = (trace || []).filter((s) => s.kind !== "answer");
-        if (!steps.length) return;
+        if (!steps.length) return null;
+        const nThink = steps.filter((s) => s.kind === "thinking").length;
+        const nCall = steps.filter((s) => s.kind === "tool-call").length;
         const box = document.createElement("div");
         box.className = "trace";
         const det = document.createElement("details");
-        det.innerHTML = `<summary>工具调用记录（${steps.length} 步）</summary>`;
+        const sum = document.createElement("summary");
+        sum.textContent =
+          `思考与工具调用记录（${steps.length} 步` +
+          (nThink ? ` · ${nThink} 思考` : "") +
+          (nCall ? ` · ${nCall} 调用` : "") + "）";
+        det.appendChild(sum);
+        const list = document.createElement("div");
+        list.className = "steps";
         steps.forEach((s) => {
           const d = document.createElement("div");
-          d.className = "step " + (s.kind === "tool-call" ? "call" : "result");
+          const cls = s.kind === "tool-call" ? "call"
+            : s.kind === "tool-result" ? "result" : "think";
+          d.className = "step " + cls;
           d.textContent = s.text;
-          det.appendChild(d);
+          list.appendChild(d);
         });
+        det.appendChild(list);
         box.appendChild(det);
-        wrap.appendChild(box);
+        return box;
       }
 
       const SESS_KEY = "cw.currentSession";
@@ -667,7 +917,13 @@
         clearChat(false);
         const msgs = await (await fetch(`/api/sessions/${id}/messages`)).json();
         if (!msgs.length) clearChat(true);
-        else msgs.forEach((m) => addMsg(m.role === "user" ? "user" : "bot", m.text));
+        else msgs.forEach((m) => {
+          const w = addMsg(m.role === "user" ? "user" : "bot", m.text);
+          if (m.role !== "user" && m.trace && m.trace.length) {
+            const tb = renderTraceBlock(m.trace);
+            if (tb) w.insertBefore(tb, w.firstChild); // 折叠记录放回答前，持久可看
+          }
+        });
         refreshLimit(); // 预警跨会话共享，切换时同步
       }
 
@@ -773,26 +1029,53 @@
         sendBtn.disabled = true;
         addTyping();
         try {
-          const res = await fetch("/api/chat", {
+          const res = await fetch("/api/chat/stream", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ session_id: currentSession, message: text, override: sessionOverride }),
           });
-          const data = await res.json();
-          removeTyping();
-          if (data.blocked) {
-            await refreshLimit();
-            openLimitDialog();
-            return;
+          const reader = res.body.getReader();
+          const dec = new TextDecoder();
+          let buf = "", wrap = null, live = null;
+          let blocked = false, errMsg = null, doneData = null;
+
+          const handle = (ev) => {
+            if (ev.t === "blocked") { blocked = true; return; }
+            if (ev.t === "error") { errMsg = ev.message; return; }
+            if (ev.t === "step") {
+              if (!wrap) { removeTyping(); wrap = startBotMessage(); live = makeLiveTrace(wrap); }
+              live.add(ev);
+            } else if (ev.t === "done") {
+              doneData = ev;
+            }
+          };
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += dec.decode(value, { stream: true });
+            let idx;
+            while ((idx = buf.indexOf("\n\n")) >= 0) {
+              const block = buf.slice(0, idx); buf = buf.slice(idx + 2);
+              const line = block.split("\n").find((l) => l.startsWith("data: "));
+              if (line) { try { handle(JSON.parse(line.slice(6))); } catch {} }
+            }
           }
-          const { wrap, done } = typeBotMessage(data.answer || "（无回复）");
-          await done;
-          renderTrace(wrap, data.trace);
-          const meta = sessions.find((s) => s.id === currentSession);
-          if (meta && data.title) {
-            meta.title = data.title;
-            topTitle.textContent = data.title;
-            renderSessionList();
+
+          removeTyping();
+          if (blocked) { await refreshLimit(); openLimitDialog(); return; }
+          if (errMsg) { addMsg("bot", "出错了：" + errMsg); return; }
+          if (!wrap) wrap = startBotMessage();          // 无 trace 步骤时也建消息
+          if (live) await live.waitDrain();             // 等所有步骤打字完成
+          await typeAnswerInto(wrap, (doneData && doneData.answer) || "（无回复）");
+          if (live) live.collapse();                    // 全部完成后自动折叠
+          if (doneData) {
+            const meta = sessions.find((s) => s.id === currentSession);
+            if (meta && doneData.title) {
+              meta.title = doneData.title;
+              topTitle.textContent = doneData.title;
+              renderSessionList();
+            }
           }
           await refreshLimit();
         } catch (e) {
@@ -1153,6 +1436,28 @@
           });
         });
       }
+
+      // 图表点击放大；点空白处 / ESC 关闭
+      function openChartModal(svgHtml) {
+        const mask = document.createElement("div");
+        mask.className = "chart-modal";
+        const inner = document.createElement("div");
+        inner.className = "chart-modal__inner";
+        inner.innerHTML = svgHtml;
+        mask.appendChild(inner);
+        document.body.appendChild(mask);
+        const close = () => {
+          mask.remove();
+          document.removeEventListener("keydown", onKey);
+        };
+        const onKey = (e) => { if (e.key === "Escape") close(); };
+        mask.addEventListener("click", (e) => { if (e.target === mask) close(); });
+        document.addEventListener("keydown", onKey);
+      }
+      chat.addEventListener("click", (e) => {
+        const box = e.target.closest && e.target.closest(".chart-box");
+        if (box) openChartModal(box.innerHTML);
+      });
 
       loadSessions();
       refreshLimit();

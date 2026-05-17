@@ -20,8 +20,49 @@ CONFIG_FILE = DATA / "config.json"
 USAGE_FILE = DATA / "usage.jsonl"
 SKILLS_DIR = DATA / "skills"
 FHE_DIR = DATA / "fhe-keys"
+TRACES_DIR = DATA / "traces"
 SKILLS_DIR.mkdir(exist_ok=True)
 FHE_DIR.mkdir(exist_ok=True)
+TRACES_DIR.mkdir(exist_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Per-session trace log (思考与工具调用记录) — persisted so it survives
+# page refresh and can be re-rendered on session reload.
+# ---------------------------------------------------------------------------
+
+def append_trace(session_id: str, trace: list) -> None:
+    safe = "".join(c for c in session_id if c.isalnum() or c in "-_")
+    if not safe:
+        return
+    p = TRACES_DIR / f"{safe}.json"
+    try:
+        cur = json.loads(p.read_text()) if p.exists() else []
+    except Exception:
+        cur = []
+    cur.append(trace or [])
+    p.write_text(json.dumps(cur, ensure_ascii=False))
+
+
+def get_traces(session_id: str) -> list:
+    safe = "".join(c for c in session_id if c.isalnum() or c in "-_")
+    p = TRACES_DIR / f"{safe}.json"
+    if not p.exists():
+        return []
+    try:
+        return json.loads(p.read_text())
+    except Exception:
+        return []
+
+
+def delete_traces(session_id: str) -> None:
+    safe = "".join(c for c in session_id if c.isalnum() or c in "-_")
+    p = TRACES_DIR / f"{safe}.json"
+    if p.exists():
+        try:
+            p.unlink()
+        except OSError:
+            pass
 
 _lock = threading.Lock()
 
