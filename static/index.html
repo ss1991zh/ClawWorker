@@ -253,11 +253,17 @@
       textarea:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(37,99,235,0.12); background: #fff; }
       button.send {
         background: var(--blue); color: #fff; border: none; border-radius: 14px;
-        padding: 0 22px; height: 48px; font-size: 15px; font-weight: 600;
+        padding: 0 22px; height: 48px; min-width: 78px; font-size: 15px; font-weight: 600;
         cursor: pointer; transition: background 0.15s; flex-shrink: 0;
+        display: inline-flex; align-items: center; justify-content: center;
       }
       button.send:hover { background: var(--blue-dark); }
       button.send:disabled { opacity: 0.5; cursor: not-allowed; }
+      /* 生成中：发送按钮切换成扁平浅灰"禁止"按钮 */
+      button.send.stop { background: #e2e8f0; padding: 0; }
+      button.send.stop:hover { background: #cbd5e1; }
+      button.send.stop .ic { width: 18px; height: 18px; color: #475569; }
+      textarea:disabled { background: var(--bg); color: var(--text-muted); cursor: not-allowed; }
 
       .settings-btn {
         margin: 0 14px 14px; padding: 11px; background: var(--bg);
@@ -460,9 +466,9 @@
             <div class="big">你好，有什么可以帮你？</div>
             <div>新建一个会话，开始对话。</div>
             <div class="chips">
-              <div class="chip">计算 23 × 19 + 7</div>
-              <div class="chip">现在几点了？</div>
-              <div class="chip">(100 - 4) / 8 等于多少</div>
+              <div class="chip">加密计算 100 + 5 等于多少</div>
+              <div class="chip">加密 [1,2,3,4,5] 和 [10,20,30,40,50] 求点积</div>
+              <div class="chip">用密文计算 (23 × 19 + 7) 并解密结果</div>
             </div>
           </div>
         </div>
@@ -624,8 +630,25 @@
       let currentSession = null;
       let sessions = [];
 
+      // ===== 追踪最新内容（follow tail）=====
+      // 用户滚到底部时自动追踪新内容；用户滚轮上翻时取消追踪、保留滚动位置；
+      // 用户再滚回底部时恢复追踪。
+      let followTail = true;
+      const NEAR_BOTTOM = 48;
+      const isNearBottom = () =>
+        main.scrollHeight - main.scrollTop - main.clientHeight <= NEAR_BOTTOM;
+      main.addEventListener("scroll", () => { followTail = isNearBottom(); }, { passive: true });
+      // 滚轮/触屏向上的瞬间立刻取消追踪（无需等到 scroll 事件）
+      main.addEventListener("wheel", (e) => { if (e.deltaY < 0) followTail = false; }, { passive: true });
+      main.addEventListener("touchmove", () => { if (!isNearBottom()) followTail = false; }, { passive: true });
+      // 只有在追踪状态下才把视图拉到底
       const scrollDown = () =>
+        requestAnimationFrame(() => { if (followTail) main.scrollTop = main.scrollHeight; });
+      // 用户主动发送 / 新建会话时强制重新追踪（用户意图就是看最新）
+      const resumeFollow = () => {
+        followTail = true;
         requestAnimationFrame(() => (main.scrollTop = main.scrollHeight));
+      };
 
       function clearChat(showWelcome) {
         chat.innerHTML = "";
@@ -684,13 +707,13 @@
           const timer = setInterval(() => {
             i += step;
             bubble.textContent = disp.slice(0, i);
-            if (atBottom()) main.scrollTop = main.scrollHeight;
+            if (followTail) main.scrollTop = main.scrollHeight;
             if (i >= disp.length) {
               clearInterval(timer);
               bubble.classList.add("md");
               bubble.innerHTML = renderMd(full);
               enhanceCharts(bubble);
-              if (atBottom()) main.scrollTop = main.scrollHeight;
+              if (followTail) main.scrollTop = main.scrollHeight;
               resolve();
             }
           }, 14);
@@ -754,11 +777,11 @@
             const t = setInterval(() => {
               i += per;
               d.textContent = full.slice(0, i);
-              if (atBottom()) main.scrollTop = main.scrollHeight;
+              if (followTail) main.scrollTop = main.scrollHeight;
               if (i >= full.length) {
                 clearInterval(t);
                 d.textContent = full;
-                if (atBottom()) main.scrollTop = main.scrollHeight;
+                if (followTail) main.scrollTop = main.scrollHeight;
                 resolve();
               }
             }, 14);
@@ -797,13 +820,13 @@
           const timer = setInterval(() => {
             i += step;
             bubble.textContent = disp.slice(0, i);
-            if (atBottom()) main.scrollTop = main.scrollHeight;
+            if (followTail) main.scrollTop = main.scrollHeight;
             if (i >= disp.length) {
               clearInterval(timer);
               bubble.classList.add("md");
               bubble.innerHTML = renderMd(full);
               enhanceCharts(bubble);
-              if (atBottom()) main.scrollTop = main.scrollHeight;
+              if (followTail) main.scrollTop = main.scrollHeight;
               resolve();
             }
           }, 14);
@@ -908,6 +931,8 @@
       }
 
       async function selectSession(id) {
+        // 切换会话前若仍处在某个会话的"生成中"UI，先重置一下（不取消后台 job）
+        if (abortCtl) { try { abortCtl.abort(); } catch (_) {} abortCtl = null; setSendMode("send"); input.disabled = false; }
         currentSession = id;
         rememberSession(id);
         renderSessionList();
@@ -915,8 +940,19 @@
         const meta = sessions.find((s) => s.id === id);
         topTitle.textContent = meta ? meta.title : "智能助手";
         clearChat(false);
-        const msgs = await (await fetch(`/api/sessions/${id}/messages`)).json();
-        if (!msgs.length) clearChat(true);
+        // 同时拿历史与"后台是否仍在为该会话生成"
+        const [msgsResp, infResp] = await Promise.all([
+          fetch(`/api/sessions/${id}/messages`),
+          fetch(`/api/chat/inflight/${id}`),
+        ]);
+        const msgs = await msgsResp.json();
+        const inflight = (await infResp.json()).inflight;
+        // 若后台仍在生成：丢掉历史里最末尾的助手回合（可能只是 checkpoint 的
+        // 半成品），让 SSE 重放完整 trace+回答，避免双份。
+        if (inflight) {
+          while (msgs.length && msgs[msgs.length - 1].role !== "user") msgs.pop();
+        }
+        if (!msgs.length && !inflight) clearChat(true);
         else msgs.forEach((m) => {
           const w = addMsg(m.role === "user" ? "user" : "bot", m.text);
           if (m.role !== "user" && m.trace && m.trace.length) {
@@ -924,7 +960,9 @@
             if (tb) w.insertBefore(tb, w.firstChild); // 折叠记录放回答前，持久可看
           }
         });
-        refreshLimit(); // 预警跨会话共享，切换时同步
+        resumeFollow();          // 切换会话后定位到最新一条
+        refreshLimit();
+        if (inflight) attachInflight(id);    // 自动续上未完成的回复
       }
 
       // ===== Token 上限预警（全局，跨会话共享）=====
@@ -1013,10 +1051,118 @@
         mask.onclick = (e) => { if (e.target === mask) { close(); applyLimitUI(); } };
       }
 
+      // ===== 发送 / 禁止 按钮状态切换 =====
+      let abortCtl = null;
+      const STOP_SVG =
+        '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+        'stroke-width="2" stroke-linecap="round" aria-hidden="true">' +
+        '<circle cx="12" cy="12" r="9"/><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/></svg>';
+      function setSendMode(mode) {
+        if (mode === "stop") {
+          sendBtn.classList.add("stop");
+          sendBtn.innerHTML = STOP_SVG;
+          sendBtn.title = "取消当前对话";
+          sendBtn.setAttribute("aria-label", "取消当前对话");
+          sendBtn.disabled = false;
+        } else {
+          sendBtn.classList.remove("stop");
+          sendBtn.innerHTML = "发送";
+          sendBtn.title = "";
+          sendBtn.setAttribute("aria-label", "发送");
+        }
+      }
+      // 点击禁止按钮：除了中断本地 SSE 读取，还要通知后端释放该会话的 job，
+      // 否则后台 job 仍占用，再次发送会收到 409。
+      async function stopChat() {
+        const sid = currentSession;
+        if (abortCtl) { try { abortCtl.abort(); } catch (_) {} }
+        if (sid) { try { await fetch(`/api/chat/cancel/${sid}`, { method: "POST" }); } catch (_) {} }
+      }
+      const isSending = () => abortCtl !== null;
+
+      // 公共的 SSE 事件消费 + 完成后渲染。`ctx` 跨 try/catch 共享，便于在
+      // 取消/异常时引用已经建好的 wrap/live。
+      async function consumeStream(response, ctx) {
+        const reader = response.body.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+        const handle = (ev) => {
+          if (ev.t === "blocked") { ctx.blocked = true; ctx.blockedMessage = ev.message; return; }
+          if (ev.t === "error") { ctx.errMsg = ev.message; return; }
+          if (ev.t === "step") {
+            if (!ctx.wrap) { removeTyping(); ctx.wrap = startBotMessage(); ctx.live = makeLiveTrace(ctx.wrap); }
+            ctx.live.add(ev);
+          } else if (ev.t === "done") {
+            ctx.doneData = ev;
+          }
+        };
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let idx;
+          while ((idx = buf.indexOf("\n\n")) >= 0) {
+            const block = buf.slice(0, idx); buf = buf.slice(idx + 2);
+            const line = block.split("\n").find((l) => l.startsWith("data: "));
+            if (line) { try { handle(JSON.parse(line.slice(6))); } catch {} }
+          }
+        }
+      }
+
+      async function renderStreamCompletion(ctx) {
+        removeTyping();
+        if (ctx.blocked) { await refreshLimit(); openLimitDialog(); return; }
+        if (ctx.errMsg) { addMsg("bot", "出错了：" + ctx.errMsg); return; }
+        if (!ctx.wrap) ctx.wrap = startBotMessage();   // 无 trace 步骤也建消息
+        if (ctx.live) await ctx.live.waitDrain();
+        await typeAnswerInto(ctx.wrap, (ctx.doneData && ctx.doneData.answer) || "（无回复）");
+        if (ctx.live) ctx.live.collapse();
+        if (ctx.doneData) {
+          const meta = sessions.find((s) => s.id === currentSession);
+          if (meta && ctx.doneData.title) {
+            meta.title = ctx.doneData.title;
+            topTitle.textContent = ctx.doneData.title;
+            renderSessionList();
+          }
+        }
+        await refreshLimit();
+      }
+
+      function handleStreamError(ctx, e) {
+        removeTyping();
+        if (e && (e.name === "AbortError" || e.code === 20)) {
+          // 用户主动取消：保留已显示的 trace/部分回答，附一句已取消
+          if (ctx.live) ctx.live.collapse();
+          if (!ctx.wrap) ctx.wrap = startBotMessage();
+          const note = document.createElement("div");
+          note.className = "att-line";
+          note.style.color = "#92400e";
+          note.textContent = "⏹ 已取消当前对话";
+          ctx.wrap.appendChild(note);
+        } else {
+          addMsg("bot", "出错了：" + (e && e.message || e));
+        }
+      }
+
+      // 进入"正在生成"状态（共享发送/恢复两种流程的 UI 开关）
+      function enterSendingUI() {
+        abortCtl = new AbortController();
+        setSendMode("stop");
+        input.disabled = true;
+        input.blur();
+      }
+      function exitSendingUI() {
+        abortCtl = null;
+        setSendMode("send");
+        input.disabled = false;
+        if (limitState.over && !sessionOverride) sendBtn.disabled = true;
+        input.focus();
+      }
+
       async function send(text) {
+        if (isSending()) return;                            // 生成中：禁止再次发送
         text = (text || input.value).trim();
         if (!text) return;
-        // 跨会话共享的上限预警：超额且未手动点「继续使用」时禁止发送
         if (limitState.over && !sessionOverride) { openLimitDialog(); return; }
         if (!currentSession) {
           const s = await (await fetch("/api/sessions", { method: "POST" })).json();
@@ -1026,64 +1172,44 @@
           renderSessionList();
         }
         input.value = ""; input.style.height = "auto"; addMsg("user", text);
-        sendBtn.disabled = true;
+        resumeFollow();
         addTyping();
+        enterSendingUI();
+        const ctx = {};
         try {
           const res = await fetch("/api/chat/stream", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ session_id: currentSession, message: text, override: sessionOverride }),
+            signal: abortCtl.signal,
           });
-          const reader = res.body.getReader();
-          const dec = new TextDecoder();
-          let buf = "", wrap = null, live = null;
-          let blocked = false, errMsg = null, doneData = null;
-
-          const handle = (ev) => {
-            if (ev.t === "blocked") { blocked = true; return; }
-            if (ev.t === "error") { errMsg = ev.message; return; }
-            if (ev.t === "step") {
-              if (!wrap) { removeTyping(); wrap = startBotMessage(); live = makeLiveTrace(wrap); }
-              live.add(ev);
-            } else if (ev.t === "done") {
-              doneData = ev;
-            }
-          };
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buf += dec.decode(value, { stream: true });
-            let idx;
-            while ((idx = buf.indexOf("\n\n")) >= 0) {
-              const block = buf.slice(0, idx); buf = buf.slice(idx + 2);
-              const line = block.split("\n").find((l) => l.startsWith("data: "));
-              if (line) { try { handle(JSON.parse(line.slice(6))); } catch {} }
-            }
+          if (!res.ok) {
+            const t = await res.text().catch(() => "");
+            throw new Error(`HTTP ${res.status}: ${t || res.statusText}`);
           }
-
-          removeTyping();
-          if (blocked) { await refreshLimit(); openLimitDialog(); return; }
-          if (errMsg) { addMsg("bot", "出错了：" + errMsg); return; }
-          if (!wrap) wrap = startBotMessage();          // 无 trace 步骤时也建消息
-          if (live) await live.waitDrain();             // 等所有步骤打字完成
-          await typeAnswerInto(wrap, (doneData && doneData.answer) || "（无回复）");
-          if (live) live.collapse();                    // 全部完成后自动折叠
-          if (doneData) {
-            const meta = sessions.find((s) => s.id === currentSession);
-            if (meta && doneData.title) {
-              meta.title = doneData.title;
-              topTitle.textContent = doneData.title;
-              renderSessionList();
-            }
-          }
-          await refreshLimit();
+          await consumeStream(res, ctx);
+          await renderStreamCompletion(ctx);
         } catch (e) {
-          removeTyping();
-          addMsg("bot", "出错了：" + e.message);
+          handleStreamError(ctx, e);
         } finally {
-          if (!(limitState.over && !sessionOverride)) sendBtn.disabled = false;
-          input.focus();
+          exitSendingUI();
+        }
+      }
+
+      // 刷新页面后，如果后台仍在为当前会话生成回复，自动重新挂载该 SSE 流。
+      async function attachInflight(sid) {
+        addTyping();
+        enterSendingUI();
+        const ctx = {};
+        try {
+          const res = await fetch(`/api/chat/stream/${sid}`, { signal: abortCtl.signal });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          await consumeStream(res, ctx);
+          await renderStreamCompletion(ctx);
+        } catch (e) {
+          handleStreamError(ctx, e);
+        } finally {
+          exitSendingUI();
         }
       }
 
@@ -1091,16 +1217,21 @@
       $("menuBtn").onclick = () => { sidebar.classList.add("open"); scrim.classList.add("open"); };
       scrim.onclick = closeSidebar;
       $("newBtn").onclick = newSession;
-      sendBtn.onclick = () => send();
+      sendBtn.onclick = () => { if (isSending()) stopChat(); else send(); };
       input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+        // 输入法（中文等）正在组词时按回车只是上屏候选，不应触发发送
+        if (e.isComposing || e.keyCode === 229) return;
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          if (!isSending()) send();  // 生成中：禁止再次发送
+        }
       });
       input.addEventListener("input", () => {
         input.style.height = "auto";
         input.style.height = Math.min(input.scrollHeight, 140) + "px";
       });
       document.querySelectorAll(".chip").forEach((c) =>
-        c.addEventListener("click", () => send(c.textContent)));
+        c.addEventListener("click", () => { if (!isSending()) send(c.textContent); }));
 
       // ===== Settings center =====
       const modalMask = $("modalMask"), modalBody = $("modalBody");

@@ -19,8 +19,10 @@ from __future__ import annotations
 import base64
 import json
 import pathlib
+import queue as _queue
 import sqlite3
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -272,114 +274,259 @@ def chat(req: ChatRequest):
     }
 
 
-@app.post("/api/chat/stream")
-def chat_stream(req: ChatRequest):
-    """Streaming variant: emits SSE events for each trace step as the agent
-    executes (思考/调用/结果 逐步显示), then a final `done` event."""
-    text = (req.message or "").strip()
-    if not text:
-        raise HTTPException(400, "empty message")
-    with _lock:
-        if not _find(_load_sessions(), req.session_id):
-            raise HTTPException(404, "session not found")
+######################################################################
+# Background "jobs" so that a chat run is decoupled from the SSE client.
+#
+# Why: with the old design, refreshing the page mid-answer killed the
+# SSE generator, which in turn cut off `ag.stream(...)` — so the agent's
+# work was lost and nothing was persisted. Now we spawn the agent in a
+# background thread and keep a per-session Job that buffers every SSE
+# event. The HTTP /api/chat/stream endpoint merely subscribes to that
+# buffer. If the browser disconnects, the thread keeps running; when the
+# user reopens the page we can GET /api/chat/stream/{sid} to replay the
+# buffered events and tail any new ones until completion.
+######################################################################
 
-    def sse(obj: dict) -> str:
-        return "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
+_SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+_JOB_TTL = 600  # keep finished jobs for 10 minutes for late refresh / resume
 
-    def gen():
-        over, today_tok, limit = _over_limit()
-        if over and not req.override:
-            yield sse(
-                {
+
+class _Job:
+    def __init__(self) -> None:
+        self.events: list[dict] = []           # full ordered history
+        self.done: bool = False
+        self.finished_at: float | None = None
+        self.subscribers: list[_queue.Queue] = []
+        self.lock = threading.Lock()
+
+    def emit(self, ev: dict) -> None:
+        with self.lock:
+            self.events.append(ev)
+            subs = list(self.subscribers)
+        for q in subs:
+            try:
+                q.put_nowait(ev)
+            except Exception:
+                pass
+
+    def finish(self) -> None:
+        with self.lock:
+            self.done = True
+            self.finished_at = time.time()
+            subs = list(self.subscribers)
+            self.subscribers.clear()
+        for q in subs:
+            try:
+                q.put_nowait(None)  # sentinel
+            except Exception:
+                pass
+
+    def subscribe(self) -> _queue.Queue:
+        q: _queue.Queue = _queue.Queue()
+        with self.lock:
+            for ev in self.events:
+                q.put_nowait(ev)
+            if self.done:
+                q.put_nowait(None)
+            else:
+                self.subscribers.append(q)
+        return q
+
+    def unsubscribe(self, q: _queue.Queue) -> None:
+        with self.lock:
+            try:
+                self.subscribers.remove(q)
+            except ValueError:
+                pass
+
+
+_jobs: dict[str, _Job] = {}
+_jobs_lock = threading.Lock()
+
+
+def _evict_expired_jobs() -> None:
+    now = time.time()
+    with _jobs_lock:
+        for sid in [s for s, j in _jobs.items()
+                    if j.done and j.finished_at and now - j.finished_at > _JOB_TTL]:
+            _jobs.pop(sid, None)
+
+
+def _start_chat_job(sid: str, text: str, override: bool) -> _Job:
+    job = _Job()
+    with _jobs_lock:
+        _jobs[sid] = job
+
+    def run() -> None:
+        try:
+            over, today_tok, limit = _over_limit()
+            if over and not override:
+                job.emit({
                     "t": "blocked",
                     "message": (
                         f"今日 Token 用量已达到上限（{today_tok:,} / {limit:,}）。\n"
                         "为控制成本，已暂停继续调用。你可以选择继续使用（忽略今日上限），"
                         "或等待明日 0 点自动重置。"
                     ),
-                }
-            )
-            return
+                })
+                return
+            cfg = stores.load_config()
+            ag = get_agent()
+            if ag is None:
+                job.emit({"t": "error",
+                          "message": "尚未配置大模型，请在「配置中心 → 大模型配置」填写 API 并保存。"})
+                return
 
-        cfg = stores.load_config()
-        ag = get_agent()
-        if ag is None:
-            yield sse({"t": "error", "message": "尚未配置大模型，请在「配置中心 → 大模型配置」填写 API 并保存。"})
-            return
+            config = {"configurable": {"thread_id": sid}}
+            trace: list = []
+            answer = ""
+            in_tok = out_tok = 0
+            try:
+                for chunk in ag.stream(
+                    {"messages": [{"role": "user", "content": text}]},
+                    config,
+                    stream_mode="updates",
+                ):
+                    for _node, upd in (chunk or {}).items():
+                        msgs = (upd or {}).get("messages", []) if isinstance(upd, dict) else []
+                        for m in msgs:
+                            r = getattr(m, "type", "")
+                            um = getattr(m, "usage_metadata", None)
+                            if um:
+                                in_tok += um.get("input_tokens", 0) or 0
+                                out_tok += um.get("output_tokens", 0) or 0
+                            tcs = getattr(m, "tool_calls", None)
+                            if tcs:
+                                if r == "ai" and m.content:
+                                    step = {"kind": "thinking", "text": str(m.content)}
+                                    trace.append(step)
+                                    job.emit({"t": "step", **step})
+                                for tc in tcs:
+                                    step = {"kind": "tool-call",
+                                            "text": f"{tc['name']}({tc['args']})"}
+                                    trace.append(step)
+                                    job.emit({"t": "step", **step})
+                            elif r == "tool":
+                                step = {"kind": "tool-result", "text": str(m.content)}
+                                trace.append(step)
+                                job.emit({"t": "step", **step})
+                            elif r == "ai" and m.content:
+                                if answer:
+                                    step = {"kind": "thinking", "text": answer}
+                                    trace.append(step)
+                                    job.emit({"t": "step", **step})
+                                answer = m.content
+            except Exception as exc:  # pragma: no cover
+                job.emit({"t": "error", "message": f"模型调用失败：{exc}"})
+                return
 
-        config = {"configurable": {"thread_id": req.session_id}}
-        trace: list = []
-        answer = ""
-        in_tok = out_tok = 0
-        try:
-            for chunk in ag.stream(
-                {"messages": [{"role": "user", "content": text}]},
-                config,
-                stream_mode="updates",
-            ):
-                for _node, upd in (chunk or {}).items():
-                    msgs = (upd or {}).get("messages", []) if isinstance(upd, dict) else []
-                    for m in msgs:
-                        r = getattr(m, "type", "")
-                        um = getattr(m, "usage_metadata", None)
-                        if um:
-                            in_tok += um.get("input_tokens", 0) or 0
-                            out_tok += um.get("output_tokens", 0) or 0
-                        tcs = getattr(m, "tool_calls", None)
-                        if tcs:
-                            if r == "ai" and m.content:
-                                step = {"kind": "thinking", "text": str(m.content)}
-                                trace.append(step)
-                                yield sse({"t": "step", **step})
-                            for tc in tcs:
-                                step = {
-                                    "kind": "tool-call",
-                                    "text": f"{tc['name']}({tc['args']})",
-                                }
-                                trace.append(step)
-                                yield sse({"t": "step", **step})
-                        elif r == "tool":
-                            step = {"kind": "tool-result", "text": str(m.content)}
-                            trace.append(step)
-                            yield sse({"t": "step", **step})
-                        elif r == "ai" and m.content:
-                            if answer:
-                                step = {"kind": "thinking", "text": answer}
-                                trace.append(step)
-                                yield sse({"t": "step", **step})
-                            answer = m.content
-        except Exception as exc:  # pragma: no cover
-            yield sse({"t": "error", "message": f"模型调用失败：{exc}"})
-            return
-
-        stores.record_usage(req.session_id, cfg.get("activeModel", "?"), in_tok, out_tok)
-        stores.append_trace(req.session_id, trace)
-        with _lock:
-            s = _load_sessions()
-            meta = _find(s, req.session_id)
-            title = "新会话"
-            if meta:
-                if meta["title"] == "新会话":
-                    meta["title"] = text[:20] + ("…" if len(text) > 20 else "")
-                meta["updated_at"] = _now()
-                _save_sessions(s)
-                title = meta["title"]
-        summary = stores.usage_summary()
-        yield sse(
-            {
+            stores.record_usage(sid, cfg.get("activeModel", "?"), in_tok, out_tok)
+            stores.append_trace(sid, trace)
+            with _lock:
+                s = _load_sessions()
+                meta = _find(s, sid)
+                title = "新会话"
+                if meta:
+                    if meta["title"] == "新会话":
+                        meta["title"] = text[:20] + ("…" if len(text) > 20 else "")
+                    meta["updated_at"] = _now()
+                    _save_sessions(s)
+                    title = meta["title"]
+            summary = stores.usage_summary()
+            job.emit({
                 "t": "done",
                 "answer": answer or "（无回复）",
                 "title": title,
                 "usage": {"in": in_tok, "out": out_tok},
                 "alert": summary["alert"],
-            }
-        )
+            })
+        finally:
+            job.finish()
 
-    return StreamingResponse(
-        gen(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    threading.Thread(target=run, daemon=True).start()
+    return job
+
+
+def _subscribe_gen(job: _Job):
+    q = job.subscribe()
+
+    def gen():
+        try:
+            while True:
+                try:
+                    ev = q.get(timeout=15)
+                except _queue.Empty:
+                    yield ": keep-alive\n\n"
+                    continue
+                if ev is None:
+                    return
+                yield "data: " + json.dumps(ev, ensure_ascii=False) + "\n\n"
+        finally:
+            job.unsubscribe(q)
+
+    return gen()
+
+
+@app.post("/api/chat/stream")
+def chat_stream(req: ChatRequest):
+    """Start an agent run in the background and stream its events.
+
+    The actual work is done in a thread (see `_start_chat_job`), so the
+    agent keeps running even if the browser refreshes or disconnects.
+    """
+    text = (req.message or "").strip()
+    if not text:
+        raise HTTPException(400, "empty message")
+    with _lock:
+        if not _find(_load_sessions(), req.session_id):
+            raise HTTPException(404, "session not found")
+    _evict_expired_jobs()
+    with _jobs_lock:
+        existing = _jobs.get(req.session_id)
+    if existing and not existing.done:
+        raise HTTPException(409, "该会话正在生成回复，请先等待完成或取消后再发送。")
+    job = _start_chat_job(req.session_id, text, req.override)
+    return StreamingResponse(_subscribe_gen(job),
+                             media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
+@app.get("/api/chat/inflight/{sid}")
+def chat_inflight(sid: str):
+    """Frontend uses this on page load to decide whether to auto-reattach."""
+    _evict_expired_jobs()
+    with _jobs_lock:
+        job = _jobs.get(sid)
+    return {"inflight": bool(job and not job.done)}
+
+
+@app.get("/api/chat/stream/{sid}")
+def chat_stream_resume(sid: str):
+    """Subscribe to an existing job's events (replay from beginning,
+    then tail until completion). Used after page refresh."""
+    _evict_expired_jobs()
+    with _jobs_lock:
+        job = _jobs.get(sid)
+    if not job:
+        return StreamingResponse(
+            iter([": no-inflight\n\n"]),
+            media_type="text/event-stream", headers=_SSE_HEADERS,
+        )
+    return StreamingResponse(_subscribe_gen(job),
+                             media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
+@app.post("/api/chat/cancel/{sid}")
+def chat_cancel(sid: str):
+    """Detach the in-memory job so the user can start a new turn.
+
+    NOTE: The background thread itself continues to run to completion
+    (we can't safely interrupt the LLM/tool calls mid-execution) but its
+    events are no longer surfaced and it won't block a fresh /api/chat/stream
+    POST. The trace + usage from the abandoned run are still persisted.
+    """
+    with _jobs_lock:
+        job = _jobs.pop(sid, None)
+    return {"ok": True, "had_job": bool(job)}
 
 
 # ===== config: providers / model / alert =====
