@@ -21,9 +21,31 @@ USAGE_FILE = DATA / "usage.jsonl"
 SKILLS_DIR = DATA / "skills"
 FHE_DIR = DATA / "fhe-keys"
 TRACES_DIR = DATA / "traces"
+UPLOADS_DIR = DATA / "uploads"
 SKILLS_DIR.mkdir(exist_ok=True)
 FHE_DIR.mkdir(exist_ok=True)
 TRACES_DIR.mkdir(exist_ok=True)
+UPLOADS_DIR.mkdir(exist_ok=True)
+
+
+def save_upload(session_id: str, name: str, data: bytes) -> dict:
+    """Persist an uploaded attachment under data/uploads/<session>/.
+    Returns {name, path, size}. The absolute path is later injected into the
+    user message so the agent can open the file via run_python (FHE venv
+    already ships with openpyxl/pandas/python-docx/pypdf/etc.)."""
+    sid = "".join(c for c in (session_id or "") if c.isalnum() or c in "-_") or "misc"
+    base = (name or "file").replace("\\", "/").split("/")[-1]
+    safe = "".join(c for c in base if c.isalnum() or c in "-_. ()[]").strip() or "file"
+    d = UPLOADS_DIR / sid
+    d.mkdir(parents=True, exist_ok=True)
+    target = d / safe
+    stem, suf = target.stem, target.suffix
+    i = 1
+    while target.exists():
+        target = d / f"{stem}({i}){suf}"
+        i += 1
+    target.write_bytes(data)
+    return {"name": target.name, "path": str(target.resolve()), "size": len(data)}
 
 
 # ---------------------------------------------------------------------------

@@ -105,6 +105,58 @@ class ChatRequest(BaseModel):
     # Per-request override: the user must explicitly click 继续使用 each page
     # session. It is NOT persisted server-side, so a page reload re-prompts.
     override: bool = False
+    # [{name, path, size}] — files already saved via /api/upload
+    attachments: list[dict] = []
+
+
+# ----- attachment helpers -----------------------------------------------------
+# Append a structured note to the user's message listing local absolute paths
+# of any uploaded files, so the ReAct agent can open them via run_python.
+ATTACH_MARK = "\n\n<<ATTACHMENTS>>\n"
+
+
+def _human_size(n: int) -> str:
+    f = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if f < 1024 or unit == "GB":
+            return f"{f:.1f} {unit}" if unit != "B" else f"{int(f)} B"
+        f /= 1024
+    return f"{n} B"
+
+
+def _augment(text: str, attachments: list[dict]) -> str:
+    atts = [a for a in (attachments or []) if a.get("path")]
+    if not atts:
+        return text
+    lines = [
+        text,
+        ATTACH_MARK.rstrip("\n"),
+        "用户上传了以下附件（已保存到本地，可用 run_python 打开分析；"
+        ".venv-fhe 已装 openpyxl/pandas/python-docx/pypdf/python-pptx）。",
+        "⚠️ 若本轮任务涉及加密/密文计算/密态分析/隐私保护：必须先用加解密工具 "
+        "skill（crypto_toolkit / ct）把附件加密成密文对象，再用 pandaseal（ps）"
+        "在密文上执行基本运算（结构查看、统计、过滤、分组、排序等），最终只对"
+        "汇总结果 ct.decrypt 取出明文展示；全程禁止用 read_file/pandas 直接打开"
+        "明文。普通分析任务不受此限。",
+    ]
+    for a in atts:
+        sz = _human_size(int(a.get("size", 0) or 0))
+        lines.append(f"- {a['path']} （{a.get('name', '')}, {sz}）")
+    return "\n".join(lines)
+
+
+def _strip_attach(text: str) -> str:
+    """For history display: hide the raw path block, keep a short 📎 hint."""
+    if ATTACH_MARK not in (text or ""):
+        return text
+    head, _, tail = text.partition(ATTACH_MARK)
+    names = [
+        ln.split("（", 1)[1].split(",", 1)[0]
+        for ln in tail.splitlines()
+        if ln.startswith("- ") and "（" in ln
+    ]
+    hint = ("\n📎 附件：" + "、".join(n for n in names if n)) if names else ""
+    return head.rstrip() + hint
 
 
 def _over_limit():
@@ -185,7 +237,7 @@ def get_messages(sid: str):
         r = getattr(m, "type", "")
         if r == "human":
             flush()  # close previous turn's assistant answer
-            out.append({"role": "user", "text": m.content})
+            out.append({"role": "user", "text": _strip_attach(m.content)})
         elif r == "ai" and getattr(m, "content", ""):
             last_ai = m.content  # keep latest; final one is the answer
     flush()
@@ -221,8 +273,9 @@ def chat(req: ChatRequest):
     if ag is None:
         raise HTTPException(400, "尚未配置大模型，请先在「配置中心 → 大模型配置」中填写 API 并保存。")
     config = {"configurable": {"thread_id": req.session_id}}
+    agent_text = _augment(text, req.attachments)
     try:
-        result = ag.invoke({"messages": [{"role": "user", "content": text}]}, config)
+        result = ag.invoke({"messages": [{"role": "user", "content": agent_text}]}, config)
     except Exception as exc:
         raise HTTPException(502, f"模型调用失败：{exc}")
 
@@ -372,7 +425,7 @@ def _evict_expired_jobs() -> None:
             _jobs.pop(sid, None)
 
 
-def _start_chat_job(sid: str, text: str, override: bool) -> _Job:
+def _start_chat_job(sid: str, text: str, override: bool, attachments: list[dict] | None = None) -> _Job:
     job = _Job()
     with _jobs_lock:
         _jobs[sid] = job
@@ -402,8 +455,9 @@ def _start_chat_job(sid: str, text: str, override: bool) -> _Job:
             answer = ""
             in_tok = out_tok = 0
             try:
+                agent_text = _augment(text, attachments or [])
                 for chunk in ag.stream(
-                    {"messages": [{"role": "user", "content": text}]},
+                    {"messages": [{"role": "user", "content": agent_text}]},
                     config,
                     stream_mode="updates",
                 ):
@@ -506,7 +560,7 @@ def chat_stream(req: ChatRequest):
         existing = _jobs.get(req.session_id)
     if existing and not existing.done:
         raise HTTPException(409, "该会话正在生成回复，请先等待完成或取消后再发送。")
-    job = _start_chat_job(req.session_id, text, req.override)
+    job = _start_chat_job(req.session_id, text, req.override, req.attachments)
     return StreamingResponse(_subscribe_gen(job),
                              media_type="text/event-stream", headers=_SSE_HEADERS)
 
@@ -705,6 +759,39 @@ def post_skill_bundle(b: SkillBundle):
 @app.delete("/api/skills/{sid:path}")
 def del_skill(sid: str):
     return {"ok": stores.delete_skill(sid)}
+
+
+# ===== attachments =====
+class UploadFile(BaseModel):
+    name: str
+    dataBase64: str
+
+
+class UploadBody(BaseModel):
+    session_id: str
+    files: list[UploadFile]
+
+
+MAX_UPLOAD = 25 * 1024 * 1024  # 25 MB / file
+
+
+@app.post("/api/upload")
+def upload_files(b: UploadBody):
+    """Persist uploaded attachments. Frontend posts an array so multiple
+    files can be uploaded in one round-trip; backend also accepts repeated
+    POSTs as the user adds files."""
+    if not b.files:
+        raise HTTPException(400, "未收到任何文件")
+    saved: list[dict] = []
+    for f in b.files:
+        try:
+            data = base64.b64decode(f.dataBase64)
+        except Exception:
+            raise HTTPException(400, f"文件 {f.name} 解码失败")
+        if len(data) > MAX_UPLOAD:
+            raise HTTPException(400, f"文件 {f.name} 超过 25MB 上限")
+        saved.append(stores.save_upload(b.session_id, f.name, data))
+    return {"ok": True, "files": saved}
 
 
 # ===== FHE keys =====

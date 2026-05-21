@@ -187,6 +187,15 @@ def _skill_catalog() -> str:
         "（henumpy/pandaseal/helearn）；生成的代码顶部需 hp.initDict()+ct.initSK()；"
         "在 run_python 里务必依次打印【加密后的密文对象】【计算后的密文对象】"
         "【解密后的明文】，让用户看到 密文→计算→明文 全过程。"
+        "\n⚠️ 涉密附件流水线（任务涉及加密/密文计算/密态分析/隐私保护时必须遵守）："
+        "\n  1) 调用加解密工具 skill：read_skill 加载 crypto_toolkit（ct），用 "
+        "`ct.encrypt_csv` / `ct.encrypt_excel` / `ct.encrypt_ndarray` 等把附件直接"
+        "读成密文对象（按扩展名选择对应 API）；"
+        "\n  2) 调用 pandaseal（ps）在密文对象上执行基本运算：read/select/filter/"
+        "groupby/sum/mean/sort/head/columns/shape 等，所有结构查看与计算都在密文上完成；"
+        "\n  3) 仅在最终汇总结果上 `ct.decrypt(...)` 取出明文展示。"
+        "\n严禁：调用 read_file 或 pandas 直接打开附件、把明文行/列内容打印或回传——"
+        "全程不接触明文，否则视为隐私泄露。"
     )
     return "\n".join(lines)
 
