@@ -266,7 +266,7 @@ def chat(req: ChatRequest):
 
     summary = stores.usage_summary()
     return {
-        "answer": answer or "（无回复）",
+        "answer": answer or _empty_answer_fallback(trace),
         "trace": trace,
         "title": title,
         "usage": {"in": in_tok, "out": out_tok},
@@ -291,10 +291,30 @@ _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 _JOB_TTL = 600  # keep finished jobs for 10 minutes for late refresh / resume
 
 
+def _empty_answer_fallback(trace: list) -> str:
+    """Build a useful reply when the LLM finished without producing any
+    final text — fall back to surfacing key info from the last tool result
+    (FHE skills always print a `=== 解密后的明文 ===` block, etc.)."""
+    results = [s["text"] for s in trace if s.get("kind") == "tool-result"]
+    if not results:
+        return '（模型未给出文字回复。请展开上方"思考与工具调用记录"查看完整过程。）'
+    last = results[-1]
+    marker = "=== 解密后的明文 ==="
+    if marker in last:
+        tail = last[last.rindex(marker):]
+        snippet = tail[:700].rstrip()
+        return ("✅ 工具执行完成，关键结果：\n\n```\n" + snippet + "\n```\n\n"
+                "（模型本轮未额外输出文字总结，以上为工具最后的输出片段。）")
+    snippet = last[-500:].rstrip()
+    return ("✅ 工具执行完成，输出摘要：\n\n```\n" + snippet + "\n```\n\n"
+            "（模型本轮未额外输出文字总结，以上为工具最后的输出片段。）")
+
+
 class _Job:
     def __init__(self) -> None:
         self.events: list[dict] = []           # full ordered history
         self.done: bool = False
+        self.started_at: float = time.time()
         self.finished_at: float | None = None
         self.subscribers: list[_queue.Queue] = []
         self.lock = threading.Lock()
@@ -433,9 +453,10 @@ def _start_chat_job(sid: str, text: str, override: bool) -> _Job:
                     _save_sessions(s)
                     title = meta["title"]
             summary = stores.usage_summary()
+            final_answer = answer or _empty_answer_fallback(trace)
             job.emit({
                 "t": "done",
-                "answer": answer or "（无回复）",
+                "answer": final_answer,
                 "title": title,
                 "usage": {"in": in_tok, "out": out_tok},
                 "alert": summary["alert"],
@@ -492,11 +513,17 @@ def chat_stream(req: ChatRequest):
 
 @app.get("/api/chat/inflight/{sid}")
 def chat_inflight(sid: str):
-    """Frontend uses this on page load to decide whether to auto-reattach."""
+    """Frontend uses this on page load to decide whether to auto-reattach.
+
+    `elapsed` lets the UI back-date its running-status timer so the pill
+    shows e.g. "23s" instead of restarting from 0 on every refresh.
+    """
     _evict_expired_jobs()
     with _jobs_lock:
         job = _jobs.get(sid)
-    return {"inflight": bool(job and not job.done)}
+    if not job or job.done:
+        return {"inflight": False, "elapsed": 0}
+    return {"inflight": True, "elapsed": int(time.time() - job.started_at)}
 
 
 @app.get("/api/chat/stream/{sid}")

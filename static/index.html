@@ -236,6 +236,19 @@
       .typing span:nth-child(3) { animation-delay: 0.3s; }
       @keyframes bounce { 0%,80%,100% { transform: scale(0.6); opacity: 0.4; } 40% { transform: scale(1); opacity: 1; } }
 
+      /* 正在执行：极简蓝色环 + 已用时长 */
+      .run-pill {
+        display: inline-flex; align-items: center; gap: 8px;
+        padding: 4px 0; color: var(--blue); font-size: 13px;
+      }
+      .run-pill .spark {
+        width: 14px; height: 14px; color: var(--blue);
+        animation: spin 0.9s linear infinite;
+        transform-origin: center;
+      }
+      .run-pill .run-time { font-variant-numeric: tabular-nums; color: var(--blue); }
+      @keyframes spin { to { transform: rotate(360deg); } }
+
       footer {
         flex-shrink: 0; padding: 14px 16px calc(14px + env(safe-area-inset-bottom));
         background: var(--surface); border-top: 1px solid var(--border);
@@ -724,6 +737,12 @@
       // 流式：先建空 bot 消息（trace 实时追加），最后把回答打字进同一消息
       function startBotMessage() {
         welcome.style.display = "none";
+        // 复用 addTyping 创建的占位 bot 消息，保留底部的 .run-pill（执行动效 + 已用时长）
+        const ex = $("typing");
+        if (ex) {
+          ex.removeAttribute("id");
+          return ex.querySelector(".msg__content");
+        }
         const msg = document.createElement("div");
         msg.className = "msg bot";
         const av = document.createElement("div");
@@ -747,7 +766,9 @@
         list.className = "steps";
         det.append(sum, list);
         box.appendChild(det);
-        wrap.appendChild(box);
+        // 把 trace 块放在 .run-pill（执行动效）之前，pill 始终留在最下方
+        const pill = wrap.querySelector(".run-pill");
+        if (pill) wrap.insertBefore(box, pill); else wrap.appendChild(box);
         const counts = { thinking: 0, "tool-call": 0, "tool-result": 0, n: 0 };
         const refresh = () => {
           sum.textContent =
@@ -808,6 +829,8 @@
 
       // 把回答打字进已有 wrap（trace 下方），返回 Promise
       function typeAnswerInto(wrap, text) {
+        // 回答开始打字前先撤下底部的"执行动效 + 已用时长"指示器
+        stopRunPill();
         const bubble = document.createElement("div");
         bubble.className = "bubble";
         wrap.appendChild(bubble);
@@ -833,13 +856,49 @@
         });
       }
 
-      function addTyping() {
+      // ===== 执行动效 + 已用时长（橙色闪烁星） =====
+      let runTimer = null;
+      let runStart = 0;
+      const SPARK_SVG =
+        '<svg class="spark" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+        'stroke-width="2.6" stroke-linecap="round" aria-hidden="true">' +
+        '<path d="M12 3 a9 9 0 0 1 0 18"/></svg>';
+      function stopRunTimer() {
+        if (runTimer) { clearInterval(runTimer); runTimer = null; }
+      }
+      function startRunTimer(startMs) {
+        runStart = startMs;
+        stopRunTimer();
+        const tick = () => {
+          const el = document.querySelector("#run-pill .run-time");
+          if (!el || !el.isConnected) { stopRunTimer(); return; }
+          el.textContent = Math.max(0, Math.floor((Date.now() - runStart) / 1000)) + "s";
+        };
+        tick();
+        runTimer = setInterval(tick, 500);
+      }
+      function stopRunPill() {
+        stopRunTimer();
+        document.getElementById("run-pill")?.remove();
+      }
+      // 占位 bot 消息：仅一个橙色星 + 已用时长，等首个 trace 步骤到达后
+      // 该消息会被 startBotMessage 继续复用，pill 一直留在底部直到回答开始。
+      function addTyping(elapsedSec) {
         const m = document.createElement("div");
         m.className = "msg bot"; m.id = "typing";
-        m.innerHTML = '<div class="avatar">助</div><div class="msg__content"><div class="bubble"><div class="typing"><span></span><span></span><span></span></div></div></div>';
+        m.innerHTML =
+          '<div class="avatar">助</div>' +
+          '<div class="msg__content">' +
+            '<div class="run-pill" id="run-pill">' + SPARK_SVG +
+            '<span class="run-time">0s</span></div>' +
+          '</div>';
         chat.appendChild(m); scrollDown();
+        startRunTimer(Date.now() - (elapsedSec || 0) * 1000);
       }
-      const removeTyping = () => $("typing")?.remove();
+      function removeTyping() {
+        stopRunTimer();
+        $("typing")?.remove();
+      }
 
       // 折叠的「思考与工具调用」记录块（放在回答前），返回 DOM 节点或 null
       function renderTraceBlock(trace) {
@@ -946,7 +1005,9 @@
           fetch(`/api/chat/inflight/${id}`),
         ]);
         const msgs = await msgsResp.json();
-        const inflight = (await infResp.json()).inflight;
+        const infData = await infResp.json();
+        const inflight = infData.inflight;
+        const elapsed = infData.elapsed || 0;
         // 若后台仍在生成：丢掉历史里最末尾的助手回合（可能只是 checkpoint 的
         // 半成品），让 SSE 重放完整 trace+回答，避免双份。
         if (inflight) {
@@ -962,7 +1023,7 @@
         });
         resumeFollow();          // 切换会话后定位到最新一条
         refreshLimit();
-        if (inflight) attachInflight(id);    // 自动续上未完成的回复
+        if (inflight) attachInflight(id, elapsed);    // 续接，已运行时长接着计
       }
 
       // ===== Token 上限预警（全局，跨会话共享）=====
@@ -1090,7 +1151,9 @@
           if (ev.t === "blocked") { ctx.blocked = true; ctx.blockedMessage = ev.message; return; }
           if (ev.t === "error") { ctx.errMsg = ev.message; return; }
           if (ev.t === "step") {
-            if (!ctx.wrap) { removeTyping(); ctx.wrap = startBotMessage(); ctx.live = makeLiveTrace(ctx.wrap); }
+            // 首个步骤到达：startBotMessage 会复用 typing 占位（含 .run-pill），
+            // pill 留在最下方，trace 插在其上，直到回答开始才撤下。
+            if (!ctx.wrap) { ctx.wrap = startBotMessage(); ctx.live = makeLiveTrace(ctx.wrap); }
             ctx.live.add(ev);
           } else if (ev.t === "done") {
             ctx.doneData = ev;
@@ -1110,10 +1173,11 @@
       }
 
       async function renderStreamCompletion(ctx) {
-        removeTyping();
-        if (ctx.blocked) { await refreshLimit(); openLimitDialog(); return; }
-        if (ctx.errMsg) { addMsg("bot", "出错了：" + ctx.errMsg); return; }
-        if (!ctx.wrap) ctx.wrap = startBotMessage();   // 无 trace 步骤也建消息
+        if (ctx.blocked) { removeTyping(); await refreshLimit(); openLimitDialog(); return; }
+        if (ctx.errMsg) { removeTyping(); addMsg("bot", "出错了：" + ctx.errMsg); return; }
+        // 进入回答阶段：startBotMessage 会复用占位（保留 pill），
+        // typeAnswerInto 会先调 stopRunPill 撤下橙星 + 已用时长再开始打字。
+        if (!ctx.wrap) ctx.wrap = startBotMessage();
         if (ctx.live) await ctx.live.waitDrain();
         await typeAnswerInto(ctx.wrap, (ctx.doneData && ctx.doneData.answer) || "（无回复）");
         if (ctx.live) ctx.live.collapse();
@@ -1129,17 +1193,18 @@
       }
 
       function handleStreamError(ctx, e) {
-        removeTyping();
         if (e && (e.name === "AbortError" || e.code === 20)) {
-          // 用户主动取消：保留已显示的 trace/部分回答，附一句已取消
+          // 用户主动取消：保留已显示的 trace，把执行指示器换成"已取消"提示
+          if (!ctx.wrap) ctx.wrap = startBotMessage();   // 复用 typing 占位
+          stopRunPill();
           if (ctx.live) ctx.live.collapse();
-          if (!ctx.wrap) ctx.wrap = startBotMessage();
           const note = document.createElement("div");
           note.className = "att-line";
           note.style.color = "#92400e";
           note.textContent = "⏹ 已取消当前对话";
           ctx.wrap.appendChild(note);
         } else {
+          removeTyping();
           addMsg("bot", "出错了：" + (e && e.message || e));
         }
       }
@@ -1197,8 +1262,8 @@
       }
 
       // 刷新页面后，如果后台仍在为当前会话生成回复，自动重新挂载该 SSE 流。
-      async function attachInflight(sid) {
-        addTyping();
+      async function attachInflight(sid, elapsedSec) {
+        addTyping(elapsedSec || 0);
         enterSendingUI();
         const ctx = {};
         try {
